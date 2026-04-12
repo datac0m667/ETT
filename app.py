@@ -17,7 +17,7 @@ WATCHLIST = [
 ]
 
 # =========================
-# SEKTOR
+# SEKTOR / INDUSTRIE
 # =========================
 SECTOR_MAP = {
     "AAPL": ("Technology", "Consumer Electronics"),
@@ -30,7 +30,40 @@ SECTOR_MAP = {
     "NFLX": ("Communication", "Streaming"),
     "AMD": ("Technology", "Semiconductors"),
     "AVGO": ("Technology", "Semiconductors"),
+    "BRK-B": ("Financial", "Insurance"),
+    "JPM": ("Financial", "Banking"),
+    "V": ("Financial", "Payments"),
+    "MA": ("Financial", "Payments"),
+    "UNH": ("Healthcare", "Insurance"),
+    "XOM": ("Energy", "Oil & Gas"),
+    "LLY": ("Healthcare", "Pharma"),
+    "CRM": ("Technology", "Software"),
+    "ADBE": ("Technology", "Software"),
+    "ORCL": ("Technology", "Software"),
+    "CSCO": ("Technology", "Networking"),
+    "QCOM": ("Technology", "Semiconductors")
 }
+
+# =========================
+# COMPANY NAMES
+# =========================
+COMPANY_OVERRIDES = {
+    "MSFT": "Microsoft Corporation",
+    "AAPL": "Apple Inc.",
+    "NVDA": "NVIDIA Corporation",
+    "AMZN": "Amazon.com, Inc.",
+    "META": "Meta Platforms, Inc.",
+    "TSLA": "Tesla, Inc."
+}
+
+def get_name(ticker):
+    if ticker in COMPANY_OVERRIDES:
+        return COMPANY_OVERRIDES[ticker]
+    try:
+        info = yf.Ticker(ticker).get_info()
+        return info.get("longName") or ticker
+    except:
+        return ticker
 
 # =========================
 # SAFE FLOAT
@@ -46,30 +79,22 @@ def safe_float(x):
         return None
 
 # =========================
-# DATA CLEANING CORE
+# CLEAN DATA
 # =========================
 def clean_columns(df):
-
-    # MultiIndex fix
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
-
-    # duplicate columns entfernen
     df = df.loc[:, ~df.columns.duplicated()]
-
     return df
 
-def safe_column(df, col):
+def safe_col(df, col):
     c = df[col]
-
-    # falls DataFrame statt Series
     if isinstance(c, pd.DataFrame):
         c = c.iloc[:, 0]
-
     return pd.Series(c).astype(float)
 
 # =========================
-# LOAD DATA
+# LOAD
 # =========================
 def load(ticker):
     try:
@@ -81,9 +106,9 @@ def load(ticker):
         df = df.reset_index()
         df = clean_columns(df)
 
-        df["Close"] = safe_column(df, "Close")
-        df["High"] = safe_column(df, "High")
-        df["Low"] = safe_column(df, "Low")
+        df["Close"] = safe_col(df, "Close")
+        df["High"] = safe_col(df, "High")
+        df["Low"] = safe_col(df, "Low")
 
         df = df[["Datetime","Open","High","Low","Close"]].dropna()
 
@@ -93,13 +118,12 @@ def load(ticker):
         return None
 
 # =========================
-# INDICATORS (FINAL SAFE)
+# INDICATORS
 # =========================
 def indicators(df):
 
     df = df.copy()
-
-    close = safe_column(df, "Close")
+    close = safe_col(df, "Close")
 
     df["EMA20"] = close.ewm(span=20, adjust=False).mean()
     df["EMA50"] = close.ewm(span=50, adjust=False).mean()
@@ -125,17 +149,13 @@ def score(df, i):
 
     price = safe_float(row["Close"])
     ema50 = safe_float(row["EMA50"])
-    ema20 = safe_float(row["EMA20"])
     atr = safe_float(row["ATR"])
 
-    if None in [price, ema50, ema20, atr]:
+    if None in [price, ema50, atr]:
         return "NO TRADE", 0
 
-    score = 50
     direction = "LONG" if price > ema50 else "SHORT"
-
-    if abs(price - ema20) < atr:
-        score += 10
+    score = 60
 
     return direction, score
 
@@ -168,11 +188,18 @@ def build_trade(df, i, direction):
 # =========================
 # SCAN
 # =========================
-def scan():
+def scan(sector_filter, industry_filter):
 
     results = []
 
     for t in WATCHLIST:
+
+        sector, industry = SECTOR_MAP.get(t, ("Unknown","Unknown"))
+
+        if sector_filter != "All" and sector != sector_filter:
+            continue
+        if industry_filter != "All" and industry != industry_filter:
+            continue
 
         df = load(t)
         if df is None or len(df) < 100:
@@ -189,6 +216,9 @@ def scan():
 
         results.append({
             "Ticker": t,
+            "Unternehmen": get_name(t),
+            "Sektor": sector,
+            "Industrie": industry,
             "Direction": direction,
             "Score": sc,
             "Entry": entry,
@@ -201,33 +231,60 @@ def scan():
     return pd.DataFrame(results)
 
 # =========================
-# CHART
+# CHART (AUTO Y SCALE FIX)
 # =========================
 def chart(df, trade):
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(x=df["Datetime"], y=df["Close"], name="Preis"))
+    fig.add_trace(go.Scatter(
+        x=df["Datetime"],
+        y=df["Close"],
+        name="Preis"
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=df["Datetime"],
+        y=df["EMA20"],
+        name="EMA20"
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=df["Datetime"],
+        y=df["EMA50"],
+        name="EMA50"
+    ))
 
     if trade["Entry"]:
-        fig.add_hline(y=trade["Entry"])
+        fig.add_hline(y=trade["Entry"], line_dash="dash")
         fig.add_hline(y=trade["SL"], line_color="red")
         fig.add_hline(y=trade["TP1"], line_color="green")
+
+    # 🔥 AUTO SCALE FIX
+    fig.update_yaxes(autorange=True, fixedrange=False)
+
+    fig.update_layout(
+        height=500,
+        xaxis=dict(rangeslider=dict(visible=True))
+    )
 
     return fig
 
 # =========================
 # UI
 # =========================
-st.title("📊 Version 23.3 – FINAL Stable System")
+st.title("📊 Version 23.4 – Final Trading Terminal")
 
-df = scan()
+sector = st.selectbox("Sektor", ["All"] + sorted(set(v[0] for v in SECTOR_MAP.values())))
+industry = st.selectbox("Industrie", ["All"] + sorted(set(v[1] for v in SECTOR_MAP.values())))
+
+df = scan(sector, industry)
 
 if df.empty:
-    st.warning("Keine Trades")
+    st.warning("Keine Setups gefunden")
 else:
 
-    event = st.dataframe(df, selection_mode="single-row", on_select="rerun")
+    event = st.dataframe(df, use_container_width=True, selection_mode="single-row", on_select="rerun")
 
     if event and len(event.selection["rows"]) > 0:
 
@@ -238,8 +295,10 @@ else:
         direction, sc = score(df_chart, len(df_chart)-1)
         entry, sl, tp1, tp2, ko, rr = build_trade(df_chart, len(df_chart)-1, direction)
 
+        st.subheader(f"{t} – {get_name(t)}")
+
         st.plotly_chart(chart(df_chart, {
             "Entry": entry,
             "SL": sl,
             "TP1": tp1
-        }))
+        }), use_container_width=True)
