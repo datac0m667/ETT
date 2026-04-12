@@ -2,19 +2,37 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
 
 # =========================
-# UNIVERSUM
+# UNIVERSE (S&P500 + NASDAQ Proxy)
 # =========================
 WATCHLIST = [
-    "AAPL","MSFT","NVDA","AMZN","META","TSLA",
-    "SAP.DE","ADS.DE","ALV.DE",
-    "MC.PA","OR.PA","HSBA.L","BP.L",
+    "AAPL","MSFT","NVDA","AMZN","META","TSLA","AVGO","AMD","GOOGL","GOOG","NFLX",
+    "BRK-B","JPM","V","MA","UNH","XOM","LLY","HD","PG","COST",
+    "CRM","ADBE","ORCL","CSCO","QCOM","IBM",
     "^GSPC","^NDX"
 ]
+
+# =========================
+# COMPANY NAME CACHE
+# =========================
+name_cache = {}
+
+def get_name(ticker):
+
+    if ticker in name_cache:
+        return name_cache[ticker]
+
+    try:
+        info = yf.Ticker(ticker).info
+        name = info.get("longName") or info.get("shortName") or ticker
+    except:
+        name = ticker
+
+    name_cache[ticker] = name
+    return name
 
 # =========================
 # DATA
@@ -29,10 +47,7 @@ def load(ticker):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [c[0] for c in df.columns]
 
-        for c in ["Open","High","Low","Close"]:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-
-        return df.dropna()
+        return df[["Open","High","Low","Close"]].dropna()
 
     except:
         return None
@@ -41,6 +56,7 @@ def load(ticker):
 # INDICATORS
 # =========================
 def indicators(df):
+
     df = df.copy()
 
     df["EMA20"] = df["Close"].ewm(span=20).mean()
@@ -59,7 +75,7 @@ def indicators(df):
     return df.dropna()
 
 # =========================
-# SCORING ENGINE (PRO LEVEL)
+# SCORE ENGINE
 # =========================
 def score(df, i):
 
@@ -70,45 +86,40 @@ def score(df, i):
     ema50 = l["EMA50"]
     atr = l["ATR"]
 
-    trend = 50
-    momentum = 50
-    entry_quality = 50
-    vol_quality = 50
+    score = 50
+    direction = "NO TRADE"
 
     # TREND
     if price > ema50:
-        trend += 25
+        score += 20
         direction = "LONG"
     else:
-        trend -= 25
+        score += 20
         direction = "SHORT"
 
-    # MOMENTUM (Breakout)
-    high20 = df["Close"].iloc[max(0, i-20):i].max()
-    low20 = df["Close"].iloc[max(0, i-20):i].min()
+    # BREAKOUT
+    high20 = df["Close"].iloc[max(0,i-20):i].max()
+    low20 = df["Close"].iloc[max(0,i-20):i].min()
 
     if price > high20:
-        momentum += 25
+        score += 25
         direction = "LONG"
+
     if price < low20:
-        momentum += 25
+        score += 25
         direction = "SHORT"
 
-    # ENTRY QUALITY (Pullback zone)
+    # ENTRY QUALITY
     if abs(price - ema20) < atr * 0.6:
-        entry_quality += 25
+        score += 10
 
-    # VOLATILITY QUALITY
-    vol_quality += max(0, 25 - (atr / price) * 100)
+    vol = atr / price
+    score -= vol * 10
 
-    total = trend + momentum + entry_quality + vol_quality
-
-    score = total / 4
-
-    return direction, score
+    return direction, max(0, min(100, score))
 
 # =========================
-# TRADE STRUCTURE (DERIVAT STYLE)
+# TRADE STRUCTURE
 # =========================
 def build_trade(df, i, direction):
 
@@ -143,7 +154,7 @@ def scan(universe):
 
         df = load(t)
 
-        if df is None or len(df) < 100:
+        if df is None or len(df) < 120:
             continue
 
         df = indicators(df)
@@ -157,14 +168,15 @@ def scan(universe):
 
         results.append({
             "Ticker": t,
+            "Unternehmen": get_name(t),   # 🆕 NEU
             "Direction": direction,
-            "Score": round(sc, 1),
-            "Entry": round(entry, 2),
-            "SL": round(sl, 2),
-            "TP1": round(tp1, 2),
-            "TP2": round(tp2, 2),
-            "KO": round(ko, 2),
-            "RR": round(rr, 2)
+            "Score": round(sc,1),
+            "Entry": round(entry,2),
+            "SL": round(sl,2),
+            "TP1": round(tp1,2),
+            "TP2": round(tp2,2),
+            "KO": round(ko,2),
+            "RR": round(rr,2)
         })
 
     return pd.DataFrame(results)
@@ -172,21 +184,24 @@ def scan(universe):
 # =========================
 # UI
 # =========================
-st.title("📊🧠 Version 20 – Pro Derivate Scanner")
+st.title("📊🧠 Version 21 – Live Derivate Scanner (Pro Upgrade)")
 
-inp = st.text_input("Tickers (optional)")
-
-watch = [x.strip().upper() for x in inp.split(",")] if inp else WATCHLIST
+page_size = 10
+page = st.number_input("Seite", min_value=1, value=1, step=1)
 
 if st.button("SCAN STARTEN"):
 
-    df = scan(watch)
+    df = scan(WATCHLIST)
 
     if df.empty:
         st.warning("Keine starken Setups gefunden.")
     else:
-        df = df.sort_values("Score", ascending=False)
 
-        st.subheader("🏆 Top Derivate Setups")
+        df = df.sort_values("Score", ascending=False).reset_index(drop=True)
 
-        st.dataframe(df, use_container_width=True)
+        start = (page - 1) * page_size
+        end = start + page_size
+
+        st.subheader(f"🏆 Top 10 Derivate Setups – Seite {page}")
+
+        st.dataframe(df.iloc[start:end], use_container_width=True)
