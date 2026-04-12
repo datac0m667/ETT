@@ -44,25 +44,59 @@ def indicators(df):
     return df
 
 def analyze(df):
+    df = df.dropna().copy()
+
     l = df.iloc[-1]
-    price = l["Close"]
+
+    def safe(x):
+        try:
+            return float(x)
+        except:
+            return np.nan
+
+    ema50 = safe(l["EMA50"])
+    ema200 = safe(l["EMA200"])
+    ema9 = safe(l["EMA9"])
+    ema21 = safe(l["EMA21"])
+    rsi = safe(l["RSI"])
+    macd = safe(l["MACD"])
+    macd_sig = safe(l["MACD_SIGNAL"])
+    price = safe(l["Close"])
+
+    # wenn Daten kaputt → skip
+    if np.isnan([ema50, ema200, ema9, ema21, rsi, macd, macd_sig, price]).any():
+        return None
 
     score = 0
 
-    if l["EMA50"] > l["EMA200"]:
+    # Trend
+    if ema50 > ema200:
         score += 30
-    if l["EMA9"] > l["EMA21"]:
-        score += 20
-    if l["RSI"] < 35:
-        score += 20
-    if l["MACD"] > l["MACD_SIGNAL"]:
+    elif ema50 < ema200:
+        score -= 30
+
+    # EMA Struktur
+    if ema9 > ema21:
         score += 20
 
-    entry = l["EMA9"]
-    sl = l["EMA21"]
+    # RSI
+    if rsi < 35:
+        score += 20
+    elif rsi > 70:
+        score -= 20
+
+    # MACD
+    if macd > macd_sig:
+        score += 20
+    else:
+        score -= 20
+
+    entry = ema9
+    sl = ema21
     tp = price + (price - sl) * 2
 
     rr = abs((tp - price) / (price - sl)) if price != sl else 0
+
     ko = sl * 0.995
     lev = price / (price - ko)
 
