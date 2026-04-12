@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 # =========================
-# WATCHLIST
+# UNIVERSUM
 # =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
@@ -17,7 +17,7 @@ WATCHLIST = [
 ]
 
 # =========================
-# DATA LOADER
+# DATA
 # =========================
 def load(ticker):
     try:
@@ -59,134 +59,134 @@ def indicators(df):
     return df.dropna()
 
 # =========================
-# CORE SIGNAL ENGINE (VERSION 11 BASIS)
+# SCORING ENGINE (PRO LEVEL)
 # =========================
-def signal(df, i):
+def score(df, i):
 
     l = df.iloc[i]
 
-    price = float(l["Close"])
-    ema20 = float(l["EMA20"])
-    ema50 = float(l["EMA50"])
-    atr = float(l["ATR"])
+    price = l["Close"]
+    ema20 = l["EMA20"]
+    ema50 = l["EMA50"]
+    atr = l["ATR"]
 
-    score_long = 50
-    score_short = 50
+    trend = 50
+    momentum = 50
+    entry_quality = 50
+    vol_quality = 50
 
-    # Trend
+    # TREND
     if price > ema50:
-        score_long += 15
+        trend += 25
+        direction = "LONG"
     else:
-        score_short += 15
+        trend -= 25
+        direction = "SHORT"
 
-    # Pullback
-    if abs(price - ema20) < atr * 0.6:
-        score_long += 10
-        score_short += 10
-
-    # Breakout
-    start = max(0, i - 20)
-    high20 = df["Close"].iloc[start:i].max()
-    low20 = df["Close"].iloc[start:i].min()
+    # MOMENTUM (Breakout)
+    high20 = df["Close"].iloc[max(0, i-20):i].max()
+    low20 = df["Close"].iloc[max(0, i-20):i].min()
 
     if price > high20:
-        score_long += 25
-    if price < low20:
-        score_short += 25
-
-    total = score_long + score_short
-    long_p = score_long / total
-    short_p = score_short / total
-
-    if long_p > 0.60:
+        momentum += 25
         direction = "LONG"
-        score = long_p
-    elif short_p > 0.60:
+    if price < low20:
+        momentum += 25
         direction = "SHORT"
-        score = short_p
-    else:
-        direction = "NO TRADE"
-        score = 0.5
+
+    # ENTRY QUALITY (Pullback zone)
+    if abs(price - ema20) < atr * 0.6:
+        entry_quality += 25
+
+    # VOLATILITY QUALITY
+    vol_quality += max(0, 25 - (atr / price) * 100)
+
+    total = trend + momentum + entry_quality + vol_quality
+
+    score = total / 4
+
+    return direction, score
+
+# =========================
+# TRADE STRUCTURE (DERIVAT STYLE)
+# =========================
+def build_trade(df, i, direction):
+
+    price = df.iloc[i]["Close"]
+    atr = df.iloc[i]["ATR"]
 
     entry = price
 
-    # =========================
-    # DERIVAT STRUCTURE
-    # =========================
     if direction == "LONG":
         sl = price - atr * 1.5
         tp1 = price + atr * 1.5
         tp2 = price + atr * 3.0
-    elif direction == "SHORT":
+        ko = sl - atr * 0.5
+    else:
         sl = price + atr * 1.5
         tp1 = price - atr * 1.5
         tp2 = price - atr * 3.0
-    else:
-        sl = tp1 = tp2 = price
+        ko = sl + atr * 0.5
 
-    # KO LEVEL (IMPORTANT FOR DERIVATES)
-    buffer = atr * 0.5
+    rr = abs(tp2 - entry) / abs(entry - sl)
 
-    if direction == "LONG":
-        ko = sl - buffer
-    elif direction == "SHORT":
-        ko = sl + buffer
-    else:
-        ko = price
-
-    rr = abs(tp2 - entry) / abs(entry - sl) if sl != entry else 0
-
-    return direction, entry, sl, tp1, tp2, ko, rr, score
+    return entry, sl, tp1, tp2, ko, rr
 
 # =========================
-# CHART
+# SCANNER
 # =========================
-def chart(df):
+def scan(universe):
 
-    fig = go.Figure()
+    results = []
 
-    fig.add_trace(go.Scatter(y=df["Close"], name="Preis"))
-    fig.add_trace(go.Scatter(y=df["EMA20"], name="EMA20"))
-    fig.add_trace(go.Scatter(y=df["EMA50"], name="EMA50"))
-
-    fig.update_layout(height=400)
-
-    return fig
-
-# =========================
-# UI
-# =========================
-st.title("🧠🏦 Version 19 – Derivate / KO Trading System")
-
-inp = st.text_input("Tickers (kommagetrennt)")
-
-watch = [x.strip().upper() for x in inp.split(",")] if inp else WATCHLIST
-
-if st.button("Analyse starten"):
-
-    for t in watch:
+    for t in universe:
 
         df = load(t)
 
-        if df is None:
+        if df is None or len(df) < 100:
             continue
 
         df = indicators(df)
 
-        direction, entry, sl, tp1, tp2, ko, rr, score = signal(df, len(df)-1)
+        direction, sc = score(df, len(df)-1)
 
-        emoji = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "⚪"
+        if sc < 65:
+            continue
 
-        st.subheader(f"{emoji} {t} → {direction}")
+        entry, sl, tp1, tp2, ko, rr = build_trade(df, len(df)-1, direction)
 
-        st.write({
+        results.append({
+            "Ticker": t,
+            "Direction": direction,
+            "Score": round(sc, 1),
             "Entry": round(entry, 2),
-            "Stop Loss": round(sl, 2),
-            "Take Profit 1": round(tp1, 2),
-            "Take Profit 2": round(tp2, 2),
-            "KO Level": round(ko, 2),
-            "Risk/Reward": round(rr, 2),
-            "Signal Score": round(score * 100, 1)
+            "SL": round(sl, 2),
+            "TP1": round(tp1, 2),
+            "TP2": round(tp2, 2),
+            "KO": round(ko, 2),
+            "RR": round(rr, 2)
         })
 
-        st.plotly_chart(chart(df), use_container_width=True)
+    return pd.DataFrame(results)
+
+# =========================
+# UI
+# =========================
+st.title("📊🧠 Version 20 – Pro Derivate Scanner")
+
+inp = st.text_input("Tickers (optional)")
+
+watch = [x.strip().upper() for x in inp.split(",")] if inp else WATCHLIST
+
+if st.button("SCAN STARTEN"):
+
+    df = scan(watch)
+
+    if df.empty:
+        st.warning("Keine starken Setups gefunden.")
+    else:
+        df = df.sort_values("Score", ascending=False)
+
+        st.subheader("🏆 Top Derivate Setups")
+
+        st.dataframe(df, use_container_width=True)
