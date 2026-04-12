@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 # =========================
-# UNIVERSE
+# UNIVERSUM
 # =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
@@ -17,7 +17,35 @@ WATCHLIST = [
 ]
 
 # =========================
-# 🧠 FIXED COMPANY NAME SYSTEM
+# SEKTOR / INDUSTRIE META (SLICER FIX)
+# =========================
+SECTOR_MAP = {
+    "AAPL": ("Technology", "Consumer Electronics"),
+    "MSFT": ("Technology", "Software"),
+    "NVDA": ("Technology", "Semiconductors"),
+    "AMZN": ("Consumer Discretionary", "E-Commerce"),
+    "META": ("Communication", "Social Media"),
+    "TSLA": ("Consumer Discretionary", "Automotive"),
+    "GOOGL": ("Communication", "Internet"),
+    "NFLX": ("Communication", "Streaming"),
+    "AMD": ("Technology", "Semiconductors"),
+    "AVGO": ("Technology", "Semiconductors"),
+    "BRK-B": ("Financial", "Insurance"),
+    "JPM": ("Financial", "Banking"),
+    "V": ("Financial", "Payments"),
+    "MA": ("Financial", "Payments"),
+    "UNH": ("Healthcare", "Insurance"),
+    "XOM": ("Energy", "Oil & Gas"),
+    "LLY": ("Healthcare", "Pharma"),
+    "CRM": ("Technology", "Software"),
+    "ADBE": ("Technology", "Software"),
+    "ORCL": ("Technology", "Software"),
+    "CSCO": ("Technology", "Networking"),
+    "QCOM": ("Technology", "Semiconductors")
+}
+
+# =========================
+# COMPANY NAME FIX
 # =========================
 COMPANY_OVERRIDES = {
     "MSFT": "Microsoft Corporation",
@@ -25,17 +53,12 @@ COMPANY_OVERRIDES = {
     "NVDA": "NVIDIA Corporation",
     "AMZN": "Amazon.com, Inc.",
     "META": "Meta Platforms, Inc.",
-    "TSLA": "Tesla, Inc.",
-    "GOOGL": "Alphabet Inc.",
-    "GOOG": "Alphabet Inc.",
-    "NFLX": "Netflix, Inc.",
-    "AMD": "Advanced Micro Devices, Inc."
+    "TSLA": "Tesla, Inc."
 }
 
 name_cache = {}
 
 def get_name(ticker):
-
     if ticker in name_cache:
         return name_cache[ticker]
 
@@ -45,16 +68,7 @@ def get_name(ticker):
 
     try:
         info = yf.Ticker(ticker).get_info()
-
-        name = (
-            info.get("longName")
-            or info.get("shortName")
-            or info.get("displayName")
-        )
-
-        if not name or name.upper() == ticker.upper():
-            name = ticker
-
+        name = info.get("longName") or info.get("shortName") or ticker
     except:
         name = ticker
 
@@ -62,7 +76,7 @@ def get_name(ticker):
     return name
 
 # =========================
-# DATA
+# DATA (FIXED DATE INDEX)
 # =========================
 def load(ticker):
     try:
@@ -71,10 +85,9 @@ def load(ticker):
         if df is None or df.empty:
             return None
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [c[0] for c in df.columns]
+        df = df.reset_index()   # 🔥 FIX: DATE INDEX PRESERVED
 
-        df = df[["Open","High","Low","Close"]].dropna()
+        df = df[["Datetime","Open","High","Low","Close"]]
 
         return df
 
@@ -104,7 +117,7 @@ def indicators(df):
     return df.dropna()
 
 # =========================
-# SCORING ENGINE
+# SCORE ENGINE
 # =========================
 def score(df, i):
 
@@ -118,7 +131,6 @@ def score(df, i):
     score = 50
     direction = "NO TRADE"
 
-    # TREND
     if price > ema50:
         score += 20
         direction = "LONG"
@@ -126,7 +138,6 @@ def score(df, i):
         score += 20
         direction = "SHORT"
 
-    # BREAKOUT
     high20 = df["Close"].iloc[max(0,i-20):i].max()
     low20 = df["Close"].iloc[max(0,i-20):i].min()
 
@@ -138,7 +149,6 @@ def score(df, i):
         score += 25
         direction = "SHORT"
 
-    # ENTRY QUALITY
     if abs(price - ema20) < atr * 0.6:
         score += 10
 
@@ -173,19 +183,21 @@ def build_trade(df, i, direction):
     return entry, sl, tp1, tp2, ko, rr
 
 # =========================
-# STATE
+# SCANNER
 # =========================
-if "selected" not in st.session_state:
-    st.session_state.selected = None
-
-# =========================
-# SCAN
-# =========================
-def scan():
+def scan(sector_filter, industry_filter):
 
     results = []
 
     for t in WATCHLIST:
+
+        sector, industry = SECTOR_MAP.get(t, ("Unknown","Unknown"))
+
+        if sector_filter != "All" and sector != sector_filter:
+            continue
+
+        if industry_filter != "All" and industry != industry_filter:
+            continue
 
         df = load(t)
 
@@ -204,6 +216,8 @@ def scan():
         results.append({
             "Ticker": t,
             "Unternehmen": get_name(t),
+            "Sektor": sector,
+            "Industrie": industry,
             "Direction": direction,
             "Score": round(sc,1),
             "Entry": round(entry,2),
@@ -217,15 +231,15 @@ def scan():
     return pd.DataFrame(results)
 
 # =========================
-# CHART
+# CHART (FIXED DATE AXIS)
 # =========================
 def chart(df, trade):
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(y=df["Close"], name="Price"))
-    fig.add_trace(go.Scatter(y=df["EMA20"], name="EMA20"))
-    fig.add_trace(go.Scatter(y=df["EMA50"], name="EMA50"))
+    fig.add_trace(go.Scatter(x=df["Datetime"], y=df["Close"], name="Price"))
+    fig.add_trace(go.Scatter(x=df["Datetime"], y=df["EMA20"], name="EMA20"))
+    fig.add_trace(go.Scatter(x=df["Datetime"], y=df["EMA50"], name="EMA50"))
 
     fig.add_hline(y=trade["Entry"], line_dash="dash")
     fig.add_hline(y=trade["SL"], line_color="red")
@@ -239,9 +253,12 @@ def chart(df, trade):
 # =========================
 # UI
 # =========================
-st.title("📊🧠 Version 22.1 – Fixed Live Derivate Terminal")
+st.title("📊🧠 Version 23 – Institutional Derivate Terminal (Sectors + Time Axis Fix)")
 
-df = scan()
+sector = st.selectbox("Sektor Filter", ["All"] + sorted(set(v[0] for v in SECTOR_MAP.values())))
+industry = st.selectbox("Industrie Filter", ["All"] + sorted(set(v[1] for v in SECTOR_MAP.values())))
+
+df = scan(sector, industry)
 
 if df.empty:
     st.warning("Keine starken Setups gefunden.")
@@ -256,49 +273,32 @@ else:
         on_select="rerun"
     )
 
-    # =========================
-    # CLICK HANDLING (FIXED)
-    # =========================
     if event and len(event.selection["rows"]) > 0:
 
         idx = event.selection["rows"][0]
-        st.session_state.selected = df.iloc[idx]["Ticker"]
+        selected = df.iloc[idx]["Ticker"]
 
-    # =========================
-    # CHART VIEW
-    # =========================
-    if st.session_state.selected:
+        st.subheader(f"📈 Chart: {selected} – {get_name(selected)}")
 
-        t = st.session_state.selected
+        df_chart = indicators(load(selected))
 
-        df_chart = load(t)
+        direction, sc = score(df_chart, len(df_chart)-1)
+        entry, sl, tp1, tp2, ko, rr = build_trade(df_chart, len(df_chart)-1, direction)
 
-        if df_chart is not None:
+        st.plotly_chart(chart(df_chart, {
+            "Entry": entry,
+            "SL": sl,
+            "TP1": tp1,
+            "TP2": tp2
+        }), use_container_width=True)
 
-            df_chart = indicators(df_chart)
-
-            direction, sc = score(df_chart, len(df_chart)-1)
-            entry, sl, tp1, tp2, ko, rr = build_trade(df_chart, len(df_chart)-1, direction)
-
-            st.subheader(f"📈 {t} – {get_name(t)}")
-
-            st.plotly_chart(
-                chart(df_chart, {
-                    "Entry": entry,
-                    "SL": sl,
-                    "TP1": tp1,
-                    "TP2": tp2
-                }),
-                use_container_width=True
-            )
-
-            st.write({
-                "Direction": direction,
-                "Score": round(sc,2),
-                "Entry": entry,
-                "SL": sl,
-                "TP1": tp1,
-                "TP2": tp2,
-                "KO": ko,
-                "RR": rr
-            })
+        st.write({
+            "Direction": direction,
+            "Score": sc,
+            "Entry": entry,
+            "SL": sl,
+            "TP1": tp1,
+            "TP2": tp2,
+            "KO": ko,
+            "RR": rr
+        })
