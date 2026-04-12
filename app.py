@@ -5,6 +5,9 @@ import numpy as np
 
 st.set_page_config(layout="wide")
 
+# =========================
+# CONFIG (HEDGE FUND STYLE)
+# =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
     "SAP.DE","ADS.DE","ALV.DE",
@@ -12,8 +15,11 @@ WATCHLIST = [
     "^GSPC","^NDX"
 ]
 
+ACCOUNT_SIZE = 10000  # simuliertes Kapital
+RISK_PER_TRADE = 0.01  # 1%
+
 # =========================
-# DATA LOADER (ROBUST)
+# DATA
 # =========================
 def load_data(ticker):
     try:
@@ -31,7 +37,7 @@ def load_data(ticker):
         return None
 
 # =========================
-# INDICATORS (MINIMAL, INSTITUTIONAL STYLE)
+# INDICATORS (INSTITUTIONAL MINIMALISM)
 # =========================
 def indicators(df):
     df = df.copy()
@@ -41,7 +47,7 @@ def indicators(df):
     df["EMA50"] = close.ewm(span=50).mean()
     df["EMA200"] = close.ewm(span=200).mean()
 
-    # ATR (Volatility-based risk engine)
+    # ATR (real volatility engine)
     df["TR"] = np.maximum(
         df["High"] - df["Low"],
         np.maximum(
@@ -71,7 +77,20 @@ def regime(df):
         return "RANGE"
 
 # =========================
-# INSTITUTIONAL SIGNAL ENGINE
+# POSITION SIZE (HEDGE FUND CORE)
+# =========================
+def position_size(account, risk_pct, entry, sl):
+    risk_amount = account * risk_pct
+    risk_per_share = abs(entry - sl)
+
+    if risk_per_share == 0:
+        return 0
+
+    size = risk_amount / risk_per_share
+    return max(size, 0)
+
+# =========================
+# SIGNAL ENGINE (VERSION 9)
 # =========================
 def signal_engine(df):
 
@@ -88,7 +107,7 @@ def signal_engine(df):
     setup = "NO_TRADE"
 
     # =========================
-    # BREAKOUT LOGIC
+    # STRUCTURE LOGIC
     # =========================
     high20 = df["Close"].rolling(20).max().iloc[-1]
     low20 = df["Close"].rolling(20).min().iloc[-1]
@@ -96,20 +115,14 @@ def signal_engine(df):
     breakout_up = price > high20 * 0.999
     breakout_down = price < low20 * 1.001
 
-    # =========================
-    # TREND LOGIC (PULLBACK)
-    # =========================
     pullback_long = abs(price - ema20) < atr * 0.6 and price > ema50
     pullback_short = abs(price - ema20) < atr * 0.6 and price < ema50
 
-    # =========================
-    # RANGE LOGIC
-    # =========================
     mean_long = reg == "RANGE" and price < ema20
     mean_short = reg == "RANGE" and price > ema20
 
     # =========================
-    # SETUP CLASSIFICATION
+    # CLASSIFICATION
     # =========================
     if breakout_up:
         setup = "BREAKOUT_LONG"
@@ -140,31 +153,47 @@ def signal_engine(df):
         score -= 10
 
     # =========================
-    # RISK ENGINE (INSTITUTIONAL)
+    # RISK ENGINE (ATR BASED)
     # =========================
-    sl = price - atr * 1.5 if "LONG" in setup else price + atr * 1.5
-    tp = price + atr * 2.5 if "LONG" in setup else price - atr * 2.5
+    if "LONG" in setup:
+        sl = price - atr * 1.5
+        tp = price + atr * 2.5
+    else:
+        sl = price + atr * 1.5
+        tp = price - atr * 2.5
 
     risk = abs(price - sl)
     reward = abs(tp - price)
 
     rr = reward / risk if risk != 0 else 0
 
-    # Score refinement
+    # =========================
+    # QUALITY FILTER
+    # =========================
+    volatility_ok = atr / price > 0.001  # Mindestbewegung
+
+    if not volatility_ok:
+        score -= 10
+
     if rr > 2:
         score += 10
     else:
         score -= 5
 
-    # Final classification
-    if score >= 75:
-        grade = "A+ SETUP"
-    elif score >= 65:
+    # =========================
+    # FINAL GRADE
+    # =========================
+    if score >= 80:
+        grade = "A+ INSTITUTIONAL"
+    elif score >= 70:
         grade = "A SETUP"
-    elif score >= 55:
+    elif score >= 60:
         grade = "B SETUP"
     else:
         grade = "NO TRADE"
+
+    # position sizing
+    size = position_size(ACCOUNT_SIZE, RISK_PER_TRADE, price, sl)
 
     return {
         "price": price,
@@ -175,13 +204,14 @@ def signal_engine(df):
         "entry": price,
         "sl": sl,
         "tp": tp,
-        "rr": rr
+        "rr": rr,
+        "position_size": round(size,2)
     }
 
 # =========================
 # UI
 # =========================
-st.title("🏦 Institutional Trading System v8")
+st.title("🏦 Hedge Fund Trading Engine v9")
 
 custom = st.text_input("Tickers (comma separated)")
 
@@ -210,11 +240,12 @@ if st.button("Scan starten"):
             "Price": round(res["price"],2),
             "SL": round(res["sl"],2),
             "TP": round(res["tp"],2),
-            "RR": round(res["rr"],2)
+            "RR": round(res["rr"],2),
+            "Size": round(res["position_size"],2)
         })
 
-    out = pd.DataFrame(results).sort_values("Score", ascending=False)
+    df_out = pd.DataFrame(results).sort_values("Score", ascending=False)
 
-    st.dataframe(out, use_container_width=True)
+    st.dataframe(df_out, use_container_width=True)
 
-    st.success("Institutioneller Scan abgeschlossen")
+    st.success("Hedge Fund Scan abgeschlossen")
