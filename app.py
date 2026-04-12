@@ -4,8 +4,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 
-from sklearn.linear_model import LogisticRegression
-
 st.set_page_config(layout="wide")
 
 # =========================
@@ -22,11 +20,11 @@ STARTKAPITAL = 10000
 RISIKO = 0.01
 
 # =========================
-# DATA
+# SAFE DATA LOADER
 # =========================
-def load(ticker):
+def load_data(ticker):
     try:
-        df = yf.download(ticker, period="2y", interval="1d", progress=False)
+        df = yf.download(ticker, period="180d", interval="1h", progress=False)
 
         if df is None or df.empty:
             return None
@@ -37,32 +35,45 @@ def load(ticker):
         for c in ["Open","High","Low","Close"]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-        return df.dropna()
+        df = df.dropna()
+
+        if len(df) < 100:
+            return None
+
+        return df
 
     except:
         return None
 
 # =========================
-# FEATURES (ML INPUT)
+# INDICATORS
 # =========================
-def features(df):
+def indicators(df):
     df = df.copy()
 
-    df["EMA20"] = df["Close"].ewm(span=20).mean()
-    df["EMA50"] = df["Close"].ewm(span=50).mean()
+    close = df["Close"]
 
-    df["RET"] = df["Close"].pct_change()
+    df["EMA20"] = close.ewm(span=20).mean()
+    df["EMA50"] = close.ewm(span=50).mean()
 
-    df["ATR"] = (df["High"] - df["Low"]).rolling(14).mean()
+    tr = np.maximum(
+        df["High"] - df["Low"],
+        np.maximum(
+            abs(df["High"] - close.shift()),
+            abs(df["Low"] - close.shift())
+        )
+    )
+
+    df["ATR"] = pd.Series(tr).rolling(14).mean()
 
     df = df.dropna()
 
     return df
 
 # =========================
-# V11 SIGNAL ENGINE (UNCHANGED LOGIC)
+# V11 SIGNAL ENGINE (STABLE CORE)
 # =========================
-def v11_signal(df, i):
+def signal(df, i):
 
     l = df.iloc[i]
 
@@ -74,17 +85,21 @@ def v11_signal(df, i):
     long_score = 50
     short_score = 50
 
+    # Trend
     if price > ema50:
         long_score += 10
     else:
         short_score += 10
 
+    # Pullback
     if abs(price - ema20) < atr * 0.6:
         long_score += 10
         short_score += 10
 
-    high20 = df["Close"].iloc[max(0, i-20):i].max()
-    low20 = df["Close"].iloc[max(0, i-20):i].min()
+    # Breakout
+    start = max(0, i - 20)
+    high20 = df["Close"].iloc[start:i].max()
+    low20 = df["Close"].iloc[start:i].min()
 
     if price > high20:
         long_score += 25
@@ -92,57 +107,43 @@ def v11_signal(df, i):
         short_score += 25
 
     total = long_score + short_score
-
     long_p = long_score / total
     short_p = short_score / total
 
     if long_p > 0.60:
         direction = "LONG"
+        conf = long_p
     elif short_p > 0.60:
         direction = "SHORT"
+        conf = short_p
     else:
         direction = "NO TRADE"
+        conf = 0.5
 
-    return direction, long_p, short_p
-
-# =========================
-# ML TRAINING MODEL
-# =========================
-def train_ml(df):
-
-    df = df.copy()
-
-    df["target"] = np.where(df["Close"].shift(-1) > df["Close"], 1, 0)
-
-    X = df[["EMA20","EMA50","RET","ATR"]]
-    y = df["target"]
-
-    model = LogisticRegression()
-
-    model.fit(X[:-1], y[:-1])
-
-    return model
-
-# =========================
-# ML PREDICTION
-# =========================
-def ml_signal(model, row):
-
-    X = np.array([[row["EMA20"], row["EMA50"], row["RET"], row["ATR"]]])
-
-    p_up = model.predict_proba(X)[0][1]
-
-    if p_up > 0.55:
-        return "LONG", p_up
-    elif p_up < 0.45:
-        return "SHORT", 1 - p_up
+    if direction == "LONG":
+        sl = price - atr * 1.5
+        tp = price + atr * 2.5
+    elif direction == "SHORT":
+        sl = price + atr * 1.5
+        tp = price - atr * 2.5
     else:
-        return "NO TRADE", 0.5
+        sl = tp = price
+
+    return direction, price, sl, tp, long_p, short_p, conf
 
 # =========================
-# PORTFOLIO BACKTEST
+# POSITION SIZING
 # =========================
-def backtest(df, model):
+def position_size(account, price, sl):
+    risk = abs(price - sl)
+    if risk == 0:
+        return 0
+    return (account * RISIKO) / risk
+
+# =========================
+# PORTFOLIO BACKTEST (SAFE)
+# =========================
+def portfolio_backtest(data):
 
     capital = STARTKAPITAL
     equity = []
@@ -150,37 +151,41 @@ def backtest(df, model):
     trades = 0
     wins = 0
 
-    for i in range(50, len(df)-1):
+    if len(data) == 0:
+        return [STARTKAPITAL], STARTKAPITAL, 0, 0
 
-        row = df.iloc[i]
+    max_len = min([len(df) for df in data.values()])
 
-        v11_dir, lp, sp = v11_signal(df, i)
-        ml_dir, ml_conf = ml_signal(model, row)
+    for i in range(50, max_len - 1):
 
-        # HYBRID DECISION
-        if v11_dir == ml_dir:
-            direction = v11_dir
-        else:
-            direction = "NO TRADE"
+        step_pnl = 0
 
-        price = float(row["Close"])
-        next_price = float(df["Close"].iloc[i+1])
+        for ticker, df in data.items():
 
-        if direction == "NO TRADE":
-            equity.append(capital)
-            continue
+            if i >= len(df):
+                continue
 
-        if direction == "LONG":
-            pnl = next_price - price
-        else:
-            pnl = price - next_price
+            direction, price, sl, tp, lp, sp, conf = signal(df, i)
 
-        capital += pnl
+            if direction == "NO TRADE":
+                continue
 
-        trades += 1
-        if pnl > 0:
-            wins += 1
+            next_price = df["Close"].iloc[i + 1]
 
+            size = position_size(capital, price, sl)
+
+            if direction == "LONG":
+                pnl = (next_price - price) * size
+            else:
+                pnl = (price - next_price) * size
+
+            step_pnl += pnl
+
+            trades += 1
+            if pnl > 0:
+                wins += 1
+
+        capital += step_pnl
         equity.append(capital)
 
     winrate = (wins / trades * 100) if trades > 0 else 0
@@ -205,44 +210,83 @@ def chart(df):
 # =========================
 # UI
 # =========================
-st.title("🧠🏦 Version 15 – Hedgefonds KI (ML Layer)")
+st.title("🧠🏦 Hedgefonds KI System v15 – FIXED STABLE")
 
 input_t = st.text_input("Tickers (kommagetrennt)")
 
 watch = [x.strip().upper() for x in input_t.split(",")] if input_t else WATCHLIST
 
-if st.button("Start Analyse"):
+if st.button("Analyse starten"):
 
     data = {}
+    results = []
 
+    # =========================
+    # LOAD DATA SAFE
+    # =========================
     for t in watch:
 
-        df = load(t)
+        df = load_data(t)
+
         if df is None:
             continue
 
-        df = features(df)
+        df = indicators(df)
+
+        if df is None or len(df) < 100:
+            continue
+
         data[t] = df
 
-    results = []
+    # =========================
+    # BACKTEST SAFE
+    # =========================
+    equity, capital, trades, winrate = portfolio_backtest(data)
 
+    # =========================
+    # OUTPUT SAFE TABLE
+    # =========================
     for t, df in data.items():
 
-        model = train_ml(df)
+        direction, price, sl, tp, lp, sp, conf = signal(df, len(df) - 1)
 
-        equity, capital, trades, winrate = backtest(df, model)
+        emoji = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "⚪"
 
         results.append({
             "Ticker": t,
-            "Endkapital": round(capital,2),
-            "Trades": trades,
-            "Winrate %": round(winrate,2)
+            "Signal": direction,
+            "Konfidenz %": round(conf * 100, 1),
+            "Preis": round(price, 2),
+            "SL": round(sl, 2),
+            "TP": round(tp, 2)
         })
 
-        st.subheader(f"📊 {t}")
+        st.subheader(f"{emoji} {t} → {direction}")
         st.plotly_chart(chart(df), use_container_width=True)
 
-        st.line_chart(equity)
+    # =========================
+    # SAFE TABLE OUTPUT (NO KEYERROR EVER)
+    # =========================
+    if len(results) > 0:
 
-    st.subheader("📋 Portfolio Ergebnis")
-    st.dataframe(pd.DataFrame(results).sort_values("Endkapital", ascending=False))
+        df_res = pd.DataFrame(results)
+
+        st.subheader("📊 Signaltabelle")
+
+        st.dataframe(df_res, use_container_width=True)
+
+    else:
+        st.warning("Keine gültigen Signale gefunden.")
+
+    # =========================
+    # EQUITY
+    # =========================
+    st.subheader("📈 Portfolio Equity")
+
+    st.write({
+        "Endkapital": round(capital, 2),
+        "Trades": trades,
+        "Gewinnrate %": round(winrate, 2)
+    })
+
+    st.line_chart(equity)
