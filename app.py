@@ -16,14 +16,28 @@ def load_data(ticker):
     return yf.download(ticker, period="3mo", interval="1h")
 
 def indicators(df):
-    df["EMA9"] = df["Close"].ewm(span=9).mean()
-    df["EMA21"] = df["Close"].ewm(span=21).mean()
-    df["EMA50"] = df["Close"].ewm(span=50).mean()
-    df["EMA200"] = df["Close"].ewm(span=200).mean()
+    df = df.copy()
 
-    df["RSI"] = RSIIndicator(df["Close"]).rsi()
+    # wichtig: nur echte Close Series erzwingen
+    close = df["Close"]
 
-    macd = MACD(df["Close"])
+    # falls MultiIndex → fixen
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+
+    close = close.squeeze()
+
+    # EMAs
+    df["EMA9"] = close.ewm(span=9).mean()
+    df["EMA21"] = close.ewm(span=21).mean()
+    df["EMA50"] = close.ewm(span=50).mean()
+    df["EMA200"] = close.ewm(span=200).mean()
+
+    # RSI FIX
+    df["RSI"] = RSIIndicator(close).rsi()
+
+    # MACD FIX
+    macd = MACD(close)
     df["MACD"] = macd.macd()
     df["MACD_SIGNAL"] = macd.macd_signal()
 
