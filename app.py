@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 # =========================
-# UNIVERSUM
+# WATCHLIST
 # =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
@@ -20,11 +20,11 @@ START_CAPITAL = 10000
 BASE_RISK = 0.01
 
 # =========================
-# DATA LOADER
+# LOAD DATA
 # =========================
-def load_data(ticker, interval="1h", period="180d"):
+def load(ticker):
     try:
-        df = yf.download(ticker, interval=interval, period=period, progress=False)
+        df = yf.download(ticker, period="180d", interval="1h", progress=False)
 
         if df is None or df.empty:
             return None
@@ -46,33 +46,22 @@ def load_data(ticker, interval="1h", period="180d"):
 def indicators(df):
     df = df.copy()
 
-    df["EMA20"] = df["Close"].ewm(span=20).mean()
-    df["EMA50"] = df["Close"].ewm(span=50).mean()
-    df["EMA200"] = df["Close"].ewm(span=200).mean()
+    close = df["Close"]
 
-    df["RET"] = df["Close"].pct_change()
+    df["EMA20"] = close.ewm(span=20).mean()
+    df["EMA50"] = close.ewm(span=50).mean()
 
-    df["ATR"] = (df["High"] - df["Low"]).rolling(14).mean()
+    tr = np.maximum(
+        df["High"] - df["Low"],
+        np.maximum(
+            abs(df["High"] - close.shift()),
+            abs(df["Low"] - close.shift())
+        )
+    )
+
+    df["ATR"] = pd.Series(tr).rolling(14).mean()
 
     return df.dropna()
-
-# =========================
-# REGIME DETECTION (INSTITUTIONAL)
-# =========================
-def regime(df):
-
-    ema50 = df["EMA50"].iloc[-1]
-    ema200 = df["EMA200"].iloc[-1]
-    price = df["Close"].iloc[-1]
-
-    trend_strength = (ema50 - ema200) / price
-
-    if ema50 > ema200 and trend_strength > 0.01:
-        return "BULL"
-    elif ema50 < ema200 and trend_strength < -0.01:
-        return "BEAR"
-    else:
-        return "SIDEWAYS"
 
 # =========================
 # V11 SIGNAL ENGINE (UNCHANGED CORE)
@@ -122,61 +111,57 @@ def signal(df, i):
         direction = "NO TRADE"
         conf = 0.5
 
+    entry = price
+
     if direction == "LONG":
         sl = price - atr * 1.5
-        tp = price + atr * 2.5
+        tp1 = price + atr * 1.5
+        tp2 = price + atr * 3.0
     elif direction == "SHORT":
         sl = price + atr * 1.5
-        tp = price - atr * 2.5
+        tp1 = price - atr * 1.5
+        tp2 = price - atr * 3.0
     else:
-        sl = tp = price
+        sl = tp1 = tp2 = price
 
-    return direction, price, sl, tp, long_p, short_p, conf
+    rr = abs(tp2 - entry) / abs(entry - sl) if sl != entry else 0
 
-# =========================
-# AI SCORE (NO ML LIBS)
-# =========================
-def ai_score(df, i):
-
-    l = df.iloc[i]
-
-    price = l["Close"]
-    ema20 = l["EMA20"]
-    ema50 = l["EMA50"]
-    atr = l["ATR"]
-
-    trend = 1 if price > ema50 else -1
-    momentum = (price - ema20) / price
-    volatility = atr / price
-
-    score = 50
-    score += trend * 15
-    score += momentum * 20
-    score -= volatility * 10
-
-    return np.clip(score, 0, 100)
+    return direction, entry, sl, tp1, tp2, rr, conf
 
 # =========================
-# POSITION SIZING (DYNAMIC RISK)
+# REINFORCEMENT LEARNING LAYER
 # =========================
-def size(capital, price, sl, regime_state):
+class RLAgent:
 
-    risk = abs(price - sl)
+    def __init__(self):
+        self.weight = 1.0
+
+    def update(self, reward):
+
+        lr = 0.05
+
+        self.weight += lr * reward
+
+        self.weight = np.clip(self.weight, 0.3, 2.0)
+
+agent = RLAgent()
+
+# =========================
+# POSITION SIZE
+# =========================
+def size(capital, entry, sl):
+
+    risk = abs(entry - sl)
+
     if risk == 0:
         return 0
 
-    risk_multiplier = {
-        "BULL": 1.0,
-        "BEAR": 0.5,
-        "SIDEWAYS": 0.7
-    }[regime_state]
-
-    return (capital * BASE_RISK * risk_multiplier) / risk
+    return (capital * BASE_RISK) / risk
 
 # =========================
-# PORTFOLIO ENGINE
+# BACKTEST (RL CONTROLLED)
 # =========================
-def portfolio(data):
+def backtest(data):
 
     capital = START_CAPITAL
     equity = []
@@ -184,35 +169,34 @@ def portfolio(data):
     trades = 0
     wins = 0
 
-    min_len = min([len(df) for df in data.values()]) if len(data) > 0 else 0
-
-    for i in range(50, min_len - 1):
+    for i in range(50, min([len(df) for df in data.values()]) - 1):
 
         step_pnl = 0
 
         for ticker, df in data.items():
 
-            reg = regime(df)
-
-            direction, price, sl, tp, lp, sp, conf = signal(df, i)
+            direction, entry, sl, tp1, tp2, rr, conf = signal(df, i)
 
             if direction == "NO TRADE":
                 continue
 
-            next_price = df["Close"].iloc[i+1]
+            next_price = df["Close"].iloc[i + 1]
 
-            s = size(capital, price, sl, reg)
-
-            pnl = 0
+            s = size(capital, entry, sl)
 
             if direction == "LONG":
-                pnl = (next_price - price) * s
+                pnl = (next_price - entry) * s
             else:
-                pnl = (price - next_price) * s
+                pnl = (entry - next_price) * s
 
-            ai = ai_score(df, i)
+            # =========================
+            # REWARD ENGINE (RL CORE)
+            # =========================
+            reward = np.tanh(pnl)
 
-            pnl *= (0.6 + ai / 100)
+            agent.update(reward)
+
+            pnl *= agent.weight
 
             step_pnl += pnl
 
@@ -237,7 +221,6 @@ def chart(df):
     fig.add_trace(go.Scatter(y=df["Close"], name="Preis"))
     fig.add_trace(go.Scatter(y=df["EMA20"], name="EMA20"))
     fig.add_trace(go.Scatter(y=df["EMA50"], name="EMA50"))
-    fig.add_trace(go.Scatter(y=df["EMA200"], name="EMA200"))
 
     fig.update_layout(height=400)
 
@@ -246,9 +229,9 @@ def chart(df):
 # =========================
 # UI
 # =========================
-st.title("🧠🏦 Version 16 – Institutionelle KI Trading Plattform")
+st.title("🧠🏦 Version 17 – Hedgefonds Reinforcement AI")
 
-inp = st.text_input("Tickers (kommagetrennt)")
+inp = st.text_input("Tickers")
 
 watch = [x.strip().upper() for x in inp.split(",")] if inp else WATCHLIST
 
@@ -258,7 +241,7 @@ if st.button("Analyse starten"):
 
     for t in watch:
 
-        df = load_data(t, "1h", "180d")
+        df = load(t)
 
         if df is None:
             continue
@@ -267,26 +250,32 @@ if st.button("Analyse starten"):
 
         data[t] = df
 
-    equity, capital, trades, winrate = portfolio(data)
+    equity, capital, trades, winrate = backtest(data)
 
     st.subheader("📊 Portfolio Ergebnis")
+
     st.write({
-        "Endkapital": round(capital,2),
+        "Endkapital": round(capital, 2),
         "Trades": trades,
-        "Winrate %": round(winrate,2)
+        "Winrate %": round(winrate, 2),
+        "RL Gewicht": round(agent.weight, 2)
     })
 
     st.subheader("📈 Equity Curve")
+
     st.line_chart(equity)
 
-    st.subheader("📉 Einzelanalyse")
+    st.subheader("📉 Einzel Signale (V11 behalten)")
 
     for t, df in data.items():
 
-        direction, price, sl, tp, lp, sp, conf = signal(df, len(df)-1)
+        d, entry, sl, tp1, tp2, rr, conf = signal(df, len(df)-1)
 
-        emoji = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "⚪"
+        emoji = "🟢" if d == "LONG" else "🔴" if d == "SHORT" else "⚪"
 
-        st.write(f"{emoji} {t} → {direction} | Confidence {round(conf*100,1)}%")
+        st.write(
+            f"{emoji} {t} → {d} | Entry {round(entry,2)} | SL {round(sl,2)} | "
+            f"TP1 {round(tp1,2)} | TP2 {round(tp2,2)} | RR {round(rr,2)}"
+        )
 
         st.plotly_chart(chart(df), use_container_width=True)
