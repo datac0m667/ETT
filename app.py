@@ -48,11 +48,11 @@ def analyze(df):
 
     l = df.iloc[-1]
 
-    def safe(x):
-        try:
-            return float(x)
-        except:
-            return np.nan
+   def safe(x):
+    try:
+        return float(x)
+    except:
+        return None
 
     ema50 = safe(l["EMA50"])
     ema200 = safe(l["EMA200"])
@@ -64,8 +64,10 @@ def analyze(df):
     price = safe(l["Close"])
 
     # wenn Daten kaputt → skip
-    if np.isnan([ema50, ema200, ema9, ema21, rsi, macd, macd_sig, price]).any():
-        return None
+    values = [ema50, ema200, ema9, ema21, rsi, macd, macd_sig, price]
+
+if any(v is None for v in values):
+    return None
 
     score = 0
 
