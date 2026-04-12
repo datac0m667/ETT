@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 # =========================
-# WATCHLIST
+# UNIVERSUM
 # =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
@@ -17,10 +17,10 @@ WATCHLIST = [
 ]
 
 START_CAPITAL = 10000
-BASE_RISK = 0.01
+RISK = 0.01
 
 # =========================
-# LOAD DATA
+# DATA
 # =========================
 def load(ticker):
     try:
@@ -46,16 +46,14 @@ def load(ticker):
 def indicators(df):
     df = df.copy()
 
-    close = df["Close"]
-
-    df["EMA20"] = close.ewm(span=20).mean()
-    df["EMA50"] = close.ewm(span=50).mean()
+    df["EMA20"] = df["Close"].ewm(span=20).mean()
+    df["EMA50"] = df["Close"].ewm(span=50).mean()
 
     tr = np.maximum(
         df["High"] - df["Low"],
         np.maximum(
-            abs(df["High"] - close.shift()),
-            abs(df["Low"] - close.shift())
+            abs(df["High"] - df["Close"].shift()),
+            abs(df["Low"] - df["Close"].shift())
         )
     )
 
@@ -64,9 +62,47 @@ def indicators(df):
     return df.dropna()
 
 # =========================
-# V11 SIGNAL ENGINE (UNCHANGED CORE)
+# 🟢 TREND AGENT
 # =========================
-def signal(df, i):
+def trend_agent(row):
+    if row["Close"] > row["EMA50"]:
+        return "LONG"
+    elif row["Close"] < row["EMA50"]:
+        return "SHORT"
+    return "NONE"
+
+# =========================
+# 🔴 MEAN REVERSION AGENT
+# =========================
+def mean_agent(row):
+    dist = abs(row["Close"] - row["EMA20"])
+
+    if dist < row["ATR"] * 0.5:
+        return "LONG"
+    if dist > row["ATR"] * 1.2 and row["Close"] < row["EMA20"]:
+        return "SHORT"
+    return "NONE"
+
+# =========================
+# ⚡ BREAKOUT AGENT
+# =========================
+def breakout_agent(df, i):
+
+    price = df["Close"].iloc[i]
+
+    high = df["Close"].iloc[max(0, i-20):i].max()
+    low = df["Close"].iloc[max(0, i-20):i].min()
+
+    if price > high:
+        return "LONG"
+    if price < low:
+        return "SHORT"
+    return "NONE"
+
+# =========================
+# V11 CORE (UNCHANGED SIGNAL STRUCTURE)
+# =========================
+def v11_signal(df, i):
 
     l = df.iloc[i]
 
@@ -87,10 +123,8 @@ def signal(df, i):
         long_score += 10
         short_score += 10
 
-    start = max(0, i - 20)
-
-    high20 = df["Close"].iloc[start:i].max()
-    low20 = df["Close"].iloc[start:i].min()
+    high20 = df["Close"].iloc[max(0, i-20):i].max()
+    low20 = df["Close"].iloc[max(0, i-20):i].min()
 
     if price > high20:
         long_score += 25
@@ -129,37 +163,39 @@ def signal(df, i):
     return direction, entry, sl, tp1, tp2, rr, conf
 
 # =========================
-# REINFORCEMENT LEARNING LAYER
+# 🧠 MULTI AGENT VOTE
 # =========================
-class RLAgent:
+def multi_agent(df, i):
 
-    def __init__(self):
-        self.weight = 1.0
+    row = df.iloc[i]
 
-    def update(self, reward):
+    t = trend_agent(row)
+    m = mean_agent(row)
+    b = breakout_agent(df, i)
 
-        lr = 0.05
+    votes = [t, m, b]
 
-        self.weight += lr * reward
+    long_votes = votes.count("LONG")
+    short_votes = votes.count("SHORT")
 
-        self.weight = np.clip(self.weight, 0.3, 2.0)
-
-agent = RLAgent()
+    if long_votes >= 2:
+        return "LONG", long_votes / 3
+    elif short_votes >= 2:
+        return "SHORT", short_votes / 3
+    else:
+        return "NO TRADE", 0.5
 
 # =========================
 # POSITION SIZE
 # =========================
 def size(capital, entry, sl):
-
     risk = abs(entry - sl)
-
     if risk == 0:
         return 0
-
-    return (capital * BASE_RISK) / risk
+    return (capital * RISK) / risk
 
 # =========================
-# BACKTEST (RL CONTROLLED)
+# BACKTEST
 # =========================
 def backtest(data):
 
@@ -169,34 +205,33 @@ def backtest(data):
     trades = 0
     wins = 0
 
-    for i in range(50, min([len(df) for df in data.values()]) - 1):
+    min_len = min([len(df) for df in data.values()]) if len(data) > 0 else 0
+
+    for i in range(50, min_len - 1):
 
         step_pnl = 0
 
         for ticker, df in data.items():
 
-            direction, entry, sl, tp1, tp2, rr, conf = signal(df, i)
+            v11_dir, entry, sl, tp1, tp2, rr, conf = v11_signal(df, i)
 
-            if direction == "NO TRADE":
+            vote_dir, vote_conf = multi_agent(df, i)
+
+            # 🧠 FINAL DECISION (HEDGEFUND CONSENSUS)
+            if v11_dir != vote_dir:
                 continue
 
-            next_price = df["Close"].iloc[i + 1]
+            if v11_dir == "NO TRADE":
+                continue
+
+            next_price = df["Close"].iloc[i+1]
 
             s = size(capital, entry, sl)
 
-            if direction == "LONG":
+            if v11_dir == "LONG":
                 pnl = (next_price - entry) * s
             else:
                 pnl = (entry - next_price) * s
-
-            # =========================
-            # REWARD ENGINE (RL CORE)
-            # =========================
-            reward = np.tanh(pnl)
-
-            agent.update(reward)
-
-            pnl *= agent.weight
 
             step_pnl += pnl
 
@@ -229,7 +264,7 @@ def chart(df):
 # =========================
 # UI
 # =========================
-st.title("🧠🏦 Version 17 – Hedgefonds Reinforcement AI")
+st.title("🧠🏦 Version 18 – Multi Agent Hedgefonds AI")
 
 inp = st.text_input("Tickers")
 
@@ -253,23 +288,20 @@ if st.button("Analyse starten"):
     equity, capital, trades, winrate = backtest(data)
 
     st.subheader("📊 Portfolio Ergebnis")
-
     st.write({
-        "Endkapital": round(capital, 2),
+        "Endkapital": round(capital,2),
         "Trades": trades,
-        "Winrate %": round(winrate, 2),
-        "RL Gewicht": round(agent.weight, 2)
+        "Winrate %": round(winrate,2)
     })
 
     st.subheader("📈 Equity Curve")
-
     st.line_chart(equity)
 
-    st.subheader("📉 Einzel Signale (V11 behalten)")
+    st.subheader("📉 Einzelanalyse")
 
     for t, df in data.items():
 
-        d, entry, sl, tp1, tp2, rr, conf = signal(df, len(df)-1)
+        d, entry, sl, tp1, tp2, rr, conf = v11_signal(df, len(df)-1)
 
         emoji = "🟢" if d == "LONG" else "🔴" if d == "SHORT" else "⚪"
 
