@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 # =========================
-# LARGE WATCHLIST (SP500 + NASDAQ TOP)
+# WATCHLIST (erweitert)
 # =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
@@ -18,9 +18,7 @@ WATCHLIST = [
     "UNH","JNJ","PFE","LLY",
     "XOM","CVX","COP",
     "WMT","COST","HD","LOW",
-    "DIS","NKE","SBUX",
-    "BA","CAT","GE",
-    "PYPL","SQ","SHOP"
+    "DIS","NKE","SBUX"
 ]
 
 # =========================
@@ -33,6 +31,8 @@ SECTOR_MAP = {
     "AMZN": ("Consumer","Ecom"),
     "META": ("Comm","Social"),
     "TSLA": ("Auto","EV"),
+    "GOOGL": ("Comm","Internet"),
+    "NFLX": ("Comm","Streaming"),
 }
 
 # =========================
@@ -52,12 +52,12 @@ def clean(df):
     return df.loc[:, ~df.columns.duplicated()]
 
 # =========================
-# DATA
+# LOAD
 # =========================
 @st.cache_data(ttl=300)
 def load(t):
     try:
-        df = yf.download(t, period="90d", interval="1h", progress=False)
+        df = yf.download(t, period="120d", interval="1h", progress=False)
         if df.empty:
             return None
         df = df.reset_index()
@@ -89,7 +89,7 @@ def ind(df):
     return df.dropna()
 
 # =========================
-# SCORE (REALISTIC)
+# 🔥 SCORE (ECHT DIFFERENZIERT)
 # =========================
 def score(df, i):
 
@@ -103,42 +103,49 @@ def score(df, i):
     if None in [p, ema20, ema50, atr]:
         return "NO", 0
 
-    score = 0
+    score = 50  # BASE
 
-    # TREND (0–25)
+    # TREND (+/- 20)
     if p > ema50:
-        score += 25
+        score += 20
         direction = "LONG"
     else:
-        score += 25
+        score += 20
         direction = "SHORT"
 
-    # MOMENTUM (0–20)
+    # MOMENTUM (+25)
     high = df["Close"].iloc[i-20:i].max()
     low = df["Close"].iloc[i-20:i].min()
 
     if p > high:
-        score += 20
+        score += 25
     elif p < low:
-        score += 20
+        score += 25
+    else:
+        score -= 10
 
-    # PULLBACK (0–20)
-    dist = abs(p-ema20)
-    if dist < atr*0.5:
-        score += 20
+    # PULLBACK (+15)
+    dist = abs(p - ema20)
+
+    if dist < atr * 0.5:
+        score += 15
     elif dist < atr:
-        score += 10
+        score += 5
+    else:
+        score -= 10
 
-    # TREND ALIGN (0–20)
+    # TREND ALIGNMENT (+15)
     if ema20 > ema50 and p > ema20:
-        score += 20
+        score += 15
     elif ema20 < ema50 and p < ema20:
-        score += 20
+        score += 15
+    else:
+        score -= 10
 
-    # VOL (penalty)
-    score -= (atr/p)*10
+    # VOLATILITY PENALTY (-20)
+    score -= (atr / p) * 20
 
-    return direction, round(score,1)
+    return direction, round(max(0, min(100, score)),1)
 
 # =========================
 # TRADE
@@ -163,36 +170,47 @@ def trade(df, i, d):
     return p,sl,tp,rr
 
 # =========================
-# SCAN
+# SCAN (MIT FILTER)
 # =========================
-def scan():
+def scan(sec, indus):
 
     res = []
 
     for t in WATCHLIST:
 
+        s,i = SECTOR_MAP.get(t,("Other","Other"))
+
+        if sec!="All" and s!=sec:
+            continue
+        if indus!="All" and i!=indus:
+            continue
+
         df = load(t)
-        if df is None: continue
+        if df is None:
+            continue
 
         df = ind(df)
 
         d,sc = score(df,len(df)-1)
 
+        if sc < 75:
+            continue
+
         p,sl,tp,rr = trade(df,len(df)-1,d)
 
         res.append({
             "Ticker":t,
+            "Sektor":s,
+            "Industrie":i,
             "Signal":d,
             "Score":sc,
-            "Entry":p,
-            "SL":sl,
-            "TP":tp,
-            "RR":rr
+            "Entry":round(p,2),
+            "SL":round(sl,2),
+            "TP":round(tp,2),
+            "RR":round(rr,2)
         })
 
-    df = pd.DataFrame(res)
-
-    return df.sort_values("Score",ascending=False).head(10)
+    return pd.DataFrame(res).sort_values("Score",ascending=False)
 
 # =========================
 # CHART
@@ -215,21 +233,26 @@ def chart(df,tr):
 # =========================
 # UI
 # =========================
-st.title("🚀 Version 25 – Echtgeld Scanner")
+st.title("🚀 Version 25.1 – PRO Derivate Scanner")
 
-df = scan()
+sec = st.selectbox("Sektor", ["All"] + sorted(set(v[0] for v in SECTOR_MAP.values())))
+indus = st.selectbox("Industrie", ["All"] + sorted(set(v[1] for v in SECTOR_MAP.values())))
 
-st.subheader("🏆 Top 10 Trades")
+df = scan(sec, indus)
 
-ev = st.dataframe(df,selection_mode="single-row",on_select="rerun")
+if df.empty:
+    st.warning("Keine starken Setups")
+else:
 
-if ev and len(ev.selection["rows"])>0:
+    ev = st.dataframe(df,selection_mode="single-row",on_select="rerun")
 
-    row = df.iloc[ev.selection["rows"][0]]
-    t = row["Ticker"]
+    if ev and len(ev.selection["rows"])>0:
 
-    dff = ind(load(t))
+        row = df.iloc[ev.selection["rows"][0]]
+        t = row["Ticker"]
 
-    st.subheader(t)
+        dff = ind(load(t))
 
-    st.plotly_chart(chart(dff,row),use_container_width=True)
+        st.subheader(t)
+
+        st.plotly_chart(chart(dff,row),use_container_width=True)
