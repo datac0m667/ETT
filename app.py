@@ -6,7 +6,7 @@ import numpy as np
 st.set_page_config(layout="wide")
 
 # =========================
-# WATCHLIST GLOBAL
+# WATCHLIST (GLOBAL)
 # =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
@@ -16,51 +16,55 @@ WATCHLIST = [
 ]
 
 # =========================
-# SAFE DATA LOADER
+# DATA LOADER
 # =========================
 def load_data(ticker):
     try:
-        df = yf.download(ticker, period="6mo", interval="1h", progress=False)
+        df = yf.download(ticker, period="90d", interval="1h", progress=False)
         if df is None or df.empty:
             return None
-        df = df.copy()
-        df = df.dropna()
-        return df
+        return df.dropna()
     except:
         return None
 
 # =========================
-# INDICATORS (NO LIBRARIES → SAFE)
+# INDICATORS (NO EXTERNAL LIBS)
 # =========================
 def indicators(df):
     df = df.copy()
-
     close = df["Close"].astype(float)
 
     # EMAs
     df["EMA9"] = close.ewm(span=9).mean()
     df["EMA21"] = close.ewm(span=21).mean()
     df["EMA50"] = close.ewm(span=50).mean()
-    df["EMA200"] = close.ewm(span=200).mean()
 
-    # RSI manual (no ta library)
+    # RSI (manual)
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
-    # MACD manual
+    # MACD (manual)
     ema12 = close.ewm(span=12).mean()
     ema26 = close.ewm(span=26).mean()
     df["MACD"] = ema12 - ema26
     df["MACD_SIGNAL"] = df["MACD"].ewm(span=9).mean()
 
-    df = df.dropna()
-    return df
+    return df.dropna()
 
 # =========================
-# ANALYSE ENGINE
+# SAFE CONVERSION
+# =========================
+def f(x):
+    try:
+        return float(x)
+    except:
+        return None
+
+# =========================
+# ANALYSE ENGINE (REALISTIC)
 # =========================
 def analyze(df):
     if df is None or df.empty:
@@ -68,60 +72,61 @@ def analyze(df):
 
     l = df.iloc[-1]
 
-    def f(x):
-        try:
-            return float(x)
-        except:
-            return None
-
     price = f(l["Close"])
     ema9 = f(l["EMA9"])
     ema21 = f(l["EMA21"])
     ema50 = f(l["EMA50"])
-    ema200 = f(l["EMA200"])
     rsi = f(l["RSI"])
     macd = f(l["MACD"])
     macd_sig = f(l["MACD_SIGNAL"])
 
     vals = [price, ema9, ema21, ema50, rsi, macd, macd_sig]
 
-    if any(v is None for v in vals):
+    if any(v is None or np.isnan(v) for v in vals):
         return None
 
-    score = 0
+    # =========================
+    # SCORE MODEL (BALANCED)
+    # =========================
+    score = 50  # baseline (important → avoids zero results)
 
-    # Trend (WICHTIG: EMA200 NICHT HARD BLOCKEN)
-    if ema50 > ema200:
-        score += 25
-    else:
-        score -= 10
-
-    # EMA momentum
+    # trend
     if ema9 > ema21:
-        score += 15
+        score += 10
+    else:
+        score -= 10
 
-    # RSI softer (nicht zu streng!)
+    # higher timeframe bias
+    if price > ema50:
+        score += 10
+    else:
+        score -= 5
+
+    # RSI zones
     if rsi < 40:
-        score += 15
-    elif rsi > 75:
+        score += 10
+    elif rsi > 70:
         score -= 10
-    else:
-        score += 5
 
-    # MACD
+    # MACD momentum
     if macd > macd_sig:
-        score += 20
+        score += 10
     else:
-        score -= 10
+        score -= 5
 
-    entry = ema9
-    sl = ema21
+    # =========================
+    # TRADE STRUCTURE
+    # =========================
+    entry = ema21
+    sl = ema50
 
-    tp = price + (price - sl) * 2 if price > sl else price - (sl - price) * 2
+    # KO-style target
+    tp = price + (price - sl) * 1.5 if price > sl else price - (sl - price) * 1.5
 
     rr = abs((tp - price) / (price - sl)) if price != sl else 0
 
-    ko = sl * 0.996
+    # KO + leverage estimate
+    ko = sl * 0.995
     lev = price / (price - ko) if price > ko else 0
 
     return price, score, entry, sl, tp, rr, ko, lev
@@ -129,7 +134,7 @@ def analyze(df):
 # =========================
 # UI
 # =========================
-st.title("🚀 Institutional KO Scanner (Stable Build)")
+st.title("🚀 Institutional KO Scanner (Stable v3)")
 
 custom = st.text_input("Tickers (comma separated)", "")
 
@@ -138,7 +143,7 @@ if custom:
 else:
     watchlist = WATCHLIST
 
-if st.button("Scan starten"):
+if st.button("Scanner starten"):
 
     results = []
 
@@ -156,10 +161,13 @@ if st.button("Scan starten"):
 
         price, score, entry, sl, tp, rr, ko, lev = result
 
-        # FILTER (quality control)
-        if score < 50:
+        # =========================
+        # FILTER (REALISTIC)
+        # =========================
+        if score < 40:
             continue
-        if rr < 2:
+
+        if rr < 1.2:
             continue
 
         results.append({
@@ -171,12 +179,12 @@ if st.button("Scan starten"):
             "TP": round(tp, 2),
             "RR": round(rr, 2),
             "KO": round(ko, 2),
-            "Leverage": round(lev, 1)
+            "Lev": round(lev, 1)
         })
 
     if results:
         df_out = pd.DataFrame(results).sort_values("Score", ascending=False)
         st.dataframe(df_out, use_container_width=True)
-        st.success("Top Setups gefunden")
+        st.success("🔥 Top Setups gefunden")
     else:
-        st.warning("Keine gültigen Trades aktuell")
+        st.warning("Keine starken Setups aktuell (Marktphase ungeeignet)")
