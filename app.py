@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
 
@@ -16,8 +17,21 @@ WATCHLIST = [
 ]
 
 # =========================
-# COMPANY NAME (FIXED + ROBUST)
+# 🧠 FIXED COMPANY NAME SYSTEM
 # =========================
+COMPANY_OVERRIDES = {
+    "MSFT": "Microsoft Corporation",
+    "AAPL": "Apple Inc.",
+    "NVDA": "NVIDIA Corporation",
+    "AMZN": "Amazon.com, Inc.",
+    "META": "Meta Platforms, Inc.",
+    "TSLA": "Tesla, Inc.",
+    "GOOGL": "Alphabet Inc.",
+    "GOOG": "Alphabet Inc.",
+    "NFLX": "Netflix, Inc.",
+    "AMD": "Advanced Micro Devices, Inc."
+}
+
 name_cache = {}
 
 def get_name(ticker):
@@ -25,23 +39,24 @@ def get_name(ticker):
     if ticker in name_cache:
         return name_cache[ticker]
 
+    if ticker in COMPANY_OVERRIDES:
+        name_cache[ticker] = COMPANY_OVERRIDES[ticker]
+        return COMPANY_OVERRIDES[ticker]
+
     try:
-        t = yf.Ticker(ticker)
-        info = t.get_info()
+        info = yf.Ticker(ticker).get_info()
 
         name = (
             info.get("longName")
             or info.get("shortName")
             or info.get("displayName")
-            or ticker
         )
 
-        # CLEAN FALLBACK FIX
-        if name.upper() == ticker.upper():
-            name = f"{ticker} (unverified name)"
+        if not name or name.upper() == ticker.upper():
+            name = ticker
 
     except:
-        name = f"{ticker} (no data)"
+        name = ticker
 
     name_cache[ticker] = name
     return name
@@ -59,7 +74,9 @@ def load(ticker):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [c[0] for c in df.columns]
 
-        return df[["Open","High","Low","Close"]].dropna()
+        df = df[["Open","High","Low","Close"]].dropna()
+
+        return df
 
     except:
         return None
@@ -68,6 +85,7 @@ def load(ticker):
 # INDICATORS
 # =========================
 def indicators(df):
+
     df = df.copy()
 
     df["EMA20"] = df["Close"].ewm(span=20).mean()
@@ -100,6 +118,7 @@ def score(df, i):
     score = 50
     direction = "NO TRADE"
 
+    # TREND
     if price > ema50:
         score += 20
         direction = "LONG"
@@ -107,6 +126,7 @@ def score(df, i):
         score += 20
         direction = "SHORT"
 
+    # BREAKOUT
     high20 = df["Close"].iloc[max(0,i-20):i].max()
     low20 = df["Close"].iloc[max(0,i-20):i].min()
 
@@ -118,6 +138,7 @@ def score(df, i):
         score += 25
         direction = "SHORT"
 
+    # ENTRY QUALITY
     if abs(price - ema20) < atr * 0.6:
         score += 10
 
@@ -152,13 +173,13 @@ def build_trade(df, i, direction):
     return entry, sl, tp1, tp2, ko, rr
 
 # =========================
-# DATA STATE (CLICK SYSTEM)
+# STATE
 # =========================
-if "selected_ticker" not in st.session_state:
-    st.session_state.selected_ticker = None
+if "selected" not in st.session_state:
+    st.session_state.selected = None
 
 # =========================
-# SCANNER
+# SCAN
 # =========================
 def scan():
 
@@ -200,19 +221,16 @@ def scan():
 # =========================
 def chart(df, trade):
 
-    import plotly.graph_objects as go
-
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(y=df["Close"], name="Preis"))
+    fig.add_trace(go.Scatter(y=df["Close"], name="Price"))
     fig.add_trace(go.Scatter(y=df["EMA20"], name="EMA20"))
     fig.add_trace(go.Scatter(y=df["EMA50"], name="EMA50"))
 
-    # ENTRY / SL / TP VISUAL
-    fig.add_hline(y=trade["Entry"], line_width=1, line_dash="dash")
-    fig.add_hline(y=trade["SL"], line_width=1, line_color="red")
-    fig.add_hline(y=trade["TP1"], line_width=1, line_color="green")
-    fig.add_hline(y=trade["TP2"], line_width=1, line_color="green")
+    fig.add_hline(y=trade["Entry"], line_dash="dash")
+    fig.add_hline(y=trade["SL"], line_color="red")
+    fig.add_hline(y=trade["TP1"], line_color="green")
+    fig.add_hline(y=trade["TP2"], line_color="green")
 
     fig.update_layout(height=450)
 
@@ -221,7 +239,7 @@ def chart(df, trade):
 # =========================
 # UI
 # =========================
-st.title("📊🧠 Version 22 – Live Derivate Terminal (Click-to-Chart)")
+st.title("📊🧠 Version 22.1 – Fixed Live Derivate Terminal")
 
 df = scan()
 
@@ -239,50 +257,48 @@ else:
     )
 
     # =========================
-    # CLICK LOGIC
+    # CLICK HANDLING (FIXED)
     # =========================
-    if len(event.selection["rows"]) > 0:
+    if event and len(event.selection["rows"]) > 0:
 
         idx = event.selection["rows"][0]
-        row = df.iloc[idx]
-
-        ticker = row["Ticker"]
-        st.session_state.selected_ticker = ticker
+        st.session_state.selected = df.iloc[idx]["Ticker"]
 
     # =========================
-    # CHART SECTION
+    # CHART VIEW
     # =========================
-    if st.session_state.selected_ticker:
+    if st.session_state.selected:
 
-        t = st.session_state.selected_ticker
+        t = st.session_state.selected
 
-        df_chart = indicators(load(t))
-        _, _, _, _, _, _ = build_trade(df_chart, len(df_chart)-1, "LONG")
+        df_chart = load(t)
 
-        trade = df_chart.iloc[-1]
+        if df_chart is not None:
 
-        direction, sc = score(df_chart, len(df_chart)-1)
-        entry, sl, tp1, tp2, ko, rr = build_trade(df_chart, len(df_chart)-1, direction)
+            df_chart = indicators(df_chart)
 
-        st.subheader(f"📈 Chart: {t} – {get_name(t)}")
+            direction, sc = score(df_chart, len(df_chart)-1)
+            entry, sl, tp1, tp2, ko, rr = build_trade(df_chart, len(df_chart)-1, direction)
 
-        st.plotly_chart(
-            chart(df_chart, {
+            st.subheader(f"📈 {t} – {get_name(t)}")
+
+            st.plotly_chart(
+                chart(df_chart, {
+                    "Entry": entry,
+                    "SL": sl,
+                    "TP1": tp1,
+                    "TP2": tp2
+                }),
+                use_container_width=True
+            )
+
+            st.write({
+                "Direction": direction,
+                "Score": round(sc,2),
                 "Entry": entry,
                 "SL": sl,
                 "TP1": tp1,
-                "TP2": tp2
-            }),
-            use_container_width=True
-        )
-
-        st.write({
-            "Direction": direction,
-            "Score": sc,
-            "Entry": entry,
-            "SL": sl,
-            "TP1": tp1,
-            "TP2": tp2,
-            "KO": ko,
-            "RR": rr
-        })
+                "TP2": tp2,
+                "KO": ko,
+                "RR": rr
+            })
