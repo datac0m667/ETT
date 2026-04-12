@@ -13,11 +13,11 @@ WATCHLIST = [
     "^GSPC","^NDX"
 ]
 
-ACCOUNT_SIZE = 10000
-RISK = 0.01
+ACCOUNT = 10000
+RISK_PER_TRADE = 0.01
 
 # =========================
-# DATA
+# SAFE DATA LOADER (HARD FIX)
 # =========================
 def load_data(ticker):
     try:
@@ -26,35 +26,51 @@ def load_data(ticker):
         if df is None or df.empty:
             return None
 
+        # flatten multiindex
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+            df.columns = [c[0] for c in df.columns]
+
+        df = df.copy()
+        df = df.dropna()
+
+        # ensure numeric safety
+        for col in ["Open","High","Low","Close"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
         return df.dropna()
 
     except:
         return None
 
+
 # =========================
-# INDICATORS
+# INDICATORS (FULL SAFE)
 # =========================
 def indicators(df):
     df = df.copy()
-    close = df["Close"]
 
+    close = df["Close"].astype(float)
+    high = df["High"].astype(float)
+    low = df["Low"].astype(float)
+
+    # EMA
     df["EMA20"] = close.ewm(span=20).mean()
     df["EMA50"] = close.ewm(span=50).mean()
     df["EMA200"] = close.ewm(span=200).mean()
 
-    df["TR"] = np.maximum(
-        df["High"] - df["Low"],
+    # ATR (TRUE RANGE)
+    tr = np.maximum(
+        high - low,
         np.maximum(
-            abs(df["High"] - df["Close"].shift()),
-            abs(df["Low"] - df["Close"].shift())
+            abs(high - close.shift()),
+            abs(low - close.shift())
         )
     )
-    df["ATR"] = df["TR"].rolling(14).mean()
+
+    df["ATR"] = pd.Series(tr).rolling(14).mean()
 
     return df.dropna()
+
 
 # =========================
 # MARKET REGIME
@@ -73,13 +89,28 @@ def regime(df):
     else:
         return "RANGE"
 
+
 # =========================
-# SIGNAL ENGINE (PROBABILITY MODEL)
+# POSITION SIZING
+# =========================
+def position_size(entry, sl):
+    risk = abs(entry - sl)
+    if risk == 0:
+        return 0
+    return (ACCOUNT * RISK_PER_TRADE) / risk
+
+
+# =========================
+# SIGNAL ENGINE (FINAL FIXED)
 # =========================
 def analyze(df):
 
+    if df is None or df.empty:
+        return None
+
     l = df.iloc[-1]
 
+    # SAFE EXTRACTION
     price = float(l["Close"])
     ema20 = float(l["EMA20"])
     ema50 = float(l["EMA50"])
@@ -87,114 +118,115 @@ def analyze(df):
 
     reg = regime(df)
 
-    # =========================
-    # SIGNAL LOGIC
-    # =========================
     long_score = 50
     short_score = 50
 
-    # trend bias
-    if price > ema50:
-        long_score += 15
-    else:
-        short_score += 15
-
-    # pullback logic
-    if abs(price - ema20) < atr * 0.5:
-        long_score += 10
-        short_score += 10
-
-    # breakout logic
+    # =========================
+    # BREAKOUT
+    # =========================
     high20 = df["Close"].rolling(20).max().iloc[-1]
     low20 = df["Close"].rolling(20).min().iloc[-1]
 
     if price > high20 * 0.999:
-        long_score += 25
+        long_score += 30
 
     if price < low20 * 1.001:
-        short_score += 25
+        short_score += 30
 
-    # regime filter
+    # =========================
+    # TREND / PULLBACK
+    # =========================
+    if abs(price - ema20) < atr * 0.6:
+        long_score += 10
+        short_score += 10
+
+    if price > ema50:
+        long_score += 10
+    else:
+        short_score += 10
+
+    # =========================
+    # REGIME BIAS
+    # =========================
     if reg == "UP":
         long_score += 10
     elif reg == "DOWN":
         short_score += 10
 
     # =========================
-    # PROBABILITY CONVERSION
+    # PROBABILITY
     # =========================
     total = long_score + short_score
-
-    long_prob = long_score / total
-    short_prob = short_score / total
+    long_p = long_score / total
+    short_p = short_score / total
 
     # =========================
-    # FINAL SIGNAL
+    # DIRECTION
     # =========================
-    if long_prob > 0.60:
+    if long_p > 0.60:
         direction = "LONG"
-        color = "green"
-        confidence = long_prob
-    elif short_prob > 0.60:
+        conf = long_p
+    elif short_p > 0.60:
         direction = "SHORT"
-        color = "red"
-        confidence = short_prob
+        conf = short_p
     else:
         direction = "NO TRADE"
-        color = "gray"
-        confidence = 0.5
+        conf = 0.5
 
     # =========================
-    # RISK MODEL
+    # RISK ENGINE
     # =========================
-    sl = price - atr * 1.5 if direction == "LONG" else price + atr * 1.5
-    tp = price + atr * 2.5 if direction == "LONG" else price - atr * 2.5
+    if direction == "LONG":
+        sl = price - atr * 1.5
+        tp = price + atr * 2.5
+    else:
+        sl = price + atr * 1.5
+        tp = price - atr * 2.5
 
-    risk = abs(price - sl)
-    size = (ACCOUNT_SIZE * RISK) / risk if risk != 0 else 0
+    rr = abs(tp - price) / abs(price - sl) if price != sl else 0
 
-    rr = abs(tp - price) / risk if risk != 0 else 0
+    size = position_size(price, sl)
 
     return {
         "price": price,
         "direction": direction,
-        "confidence": confidence,
-        "long_prob": long_prob,
-        "short_prob": short_prob,
+        "confidence": conf,
+        "long_p": long_p,
+        "short_p": short_p,
+        "regime": reg,
         "sl": sl,
         "tp": tp,
         "rr": rr,
         "size": size,
-        "ema20": ema20,
-        "ema50": ema50,
         "df": df
     }
+
 
 # =========================
 # CHART
 # =========================
-def plot_chart(data, ema20, ema50, direction):
+def plot(df):
 
     fig = go.Figure()
 
     fig.add_trace(go.Candlestick(
-        x=data.index,
-        open=data["Open"],
-        high=data["High"],
-        low=data["Low"],
-        close=data["Close"],
+        x=df.index,
+        open=df["Open"],
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
         name="Price"
     ))
 
     fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data["EMA20"],
+        x=df.index,
+        y=df["EMA20"],
         name="EMA20"
     ))
 
     fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data["EMA50"],
+        x=df.index,
+        y=df["EMA50"],
         name="EMA50"
     ))
 
@@ -202,12 +234,13 @@ def plot_chart(data, ema20, ema50, direction):
 
     return fig
 
+
 # =========================
 # UI
 # =========================
-st.title("🏦 Quant Hedge Fund v10 – Probability Engine")
+st.title("🏦 Hedge Fund Quant System v11 (FULL FIXED)")
 
-custom = st.text_input("Tickers")
+custom = st.text_input("Tickers (comma separated)")
 
 watchlist = [x.strip().upper() for x in custom.split(",")] if custom else WATCHLIST
 
@@ -222,8 +255,10 @@ if st.button("Scan starten"):
             continue
 
         df = indicators(df)
-
         res = analyze(df)
+
+        if res is None:
+            continue
 
         emoji = "🟢" if res["direction"] == "LONG" else "🔴" if res["direction"] == "SHORT" else "⚪"
 
@@ -231,8 +266,9 @@ if st.button("Scan starten"):
             "Ticker": f"{emoji} {ticker}",
             "Direction": res["direction"],
             "Confidence %": round(res["confidence"] * 100, 1),
-            "Long Prob %": round(res["long_prob"] * 100, 1),
-            "Short Prob %": round(res["short_prob"] * 100, 1),
+            "Long %": round(res["long_p"] * 100, 1),
+            "Short %": round(res["short_p"] * 100, 1),
+            "Regime": res["regime"],
             "Price": round(res["price"],2),
             "SL": round(res["sl"],2),
             "TP": round(res["tp"],2),
@@ -245,16 +281,13 @@ if st.button("Scan starten"):
     st.dataframe(df_out, use_container_width=True)
 
     # =========================
-    # DETAIL CHART (TOP TRADE)
+    # TOP CHART
     # =========================
     if len(results) > 0:
-        top = results[0]
+        top = results[0]["Ticker"].replace("🟢 ","").replace("🔴 ","").replace("⚪ ","")
 
-        st.subheader("📊 Top Setup Chart")
-
-        df = load_data(top["Ticker"].replace("🟢 ","").replace("🔴 ",""))
+        df = load_data(top)
         df = indicators(df)
 
-        chart = plot_chart(df, df["EMA20"], df["EMA50"], top["Direction"])
-
-        st.plotly_chart(chart, use_container_width=True)
+        st.subheader("📊 Top Setup Chart")
+        st.plotly_chart(plot(df), use_container_width=True)
