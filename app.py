@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 # =========================
-# UNIVERSUM
+# WATCHLIST
 # =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
@@ -17,7 +17,7 @@ WATCHLIST = [
 ]
 
 # =========================
-# SEKTOR / INDUSTRIE META (SLICER FIX)
+# SEKTOR / INDUSTRIE
 # =========================
 SECTOR_MAP = {
     "AAPL": ("Technology", "Consumer Electronics"),
@@ -76,7 +76,7 @@ def get_name(ticker):
     return name
 
 # =========================
-# DATA (FIXED DATE INDEX)
+# DATA
 # =========================
 def load(ticker):
     try:
@@ -85,9 +85,8 @@ def load(ticker):
         if df is None or df.empty:
             return None
 
-        df = df.reset_index()   # 🔥 FIX: DATE INDEX PRESERVED
-
-        df = df[["Datetime","Open","High","Low","Close"]]
+        df = df.reset_index()
+        df = df[["Datetime","Open","High","Low","Close"]].dropna()
 
         return df
 
@@ -95,7 +94,7 @@ def load(ticker):
         return None
 
 # =========================
-# INDICATORS
+# INDICATORS (FIXED ATR)
 # =========================
 def indicators(df):
 
@@ -117,16 +116,16 @@ def indicators(df):
     return df.dropna()
 
 # =========================
-# SCORE ENGINE
+# SCORE (FIXED)
 # =========================
 def score(df, i):
 
-    l = df.iloc[i]
+    row = df.iloc[i]
 
-    price = l["Close"]
-    ema20 = l["EMA20"]
-    ema50 = l["EMA50"]
-    atr = l["ATR"]
+    price = float(row["Close"])
+    ema20 = float(row["EMA20"])
+    ema50 = float(row["EMA50"])
+    atr = float(row["ATR"])
 
     score = 50
     direction = "NO TRADE"
@@ -138,8 +137,8 @@ def score(df, i):
         score += 20
         direction = "SHORT"
 
-    high20 = df["Close"].iloc[max(0,i-20):i].max()
-    low20 = df["Close"].iloc[max(0,i-20):i].min()
+    high20 = float(df["Close"].iloc[max(0, i-20):i].max())
+    low20 = float(df["Close"].iloc[max(0, i-20):i].min())
 
     if price > high20:
         score += 25
@@ -162,8 +161,8 @@ def score(df, i):
 # =========================
 def build_trade(df, i, direction):
 
-    price = df.iloc[i]["Close"]
-    atr = df.iloc[i]["ATR"]
+    price = float(df.iloc[i]["Close"])
+    atr = float(df.iloc[i]["ATR"])
 
     entry = price
 
@@ -206,6 +205,9 @@ def scan(sector_filter, industry_filter):
 
         df = indicators(df)
 
+        if df.empty:
+            continue
+
         direction, sc = score(df, len(df)-1)
 
         if sc < 65:
@@ -231,13 +233,13 @@ def scan(sector_filter, industry_filter):
     return pd.DataFrame(results)
 
 # =========================
-# CHART (FIXED DATE AXIS)
+# CHART (FIXED TIME AXIS)
 # =========================
 def chart(df, trade):
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(x=df["Datetime"], y=df["Close"], name="Price"))
+    fig.add_trace(go.Scatter(x=df["Datetime"], y=df["Close"], name="Preis"))
     fig.add_trace(go.Scatter(x=df["Datetime"], y=df["EMA20"], name="EMA20"))
     fig.add_trace(go.Scatter(x=df["Datetime"], y=df["EMA50"], name="EMA50"))
 
@@ -253,7 +255,7 @@ def chart(df, trade):
 # =========================
 # UI
 # =========================
-st.title("📊🧠 Version 23 – Institutional Derivate Terminal (Sectors + Time Axis Fix)")
+st.title("📊🧠 Version 23.1 – Stabiler Derivate Scanner")
 
 sector = st.selectbox("Sektor Filter", ["All"] + sorted(set(v[0] for v in SECTOR_MAP.values())))
 industry = st.selectbox("Industrie Filter", ["All"] + sorted(set(v[1] for v in SECTOR_MAP.values())))
@@ -278,27 +280,31 @@ else:
         idx = event.selection["rows"][0]
         selected = df.iloc[idx]["Ticker"]
 
-        st.subheader(f"📈 Chart: {selected} – {get_name(selected)}")
+        st.subheader(f"📈 {selected} – {get_name(selected)}")
 
-        df_chart = indicators(load(selected))
+        df_chart = load(selected)
 
-        direction, sc = score(df_chart, len(df_chart)-1)
-        entry, sl, tp1, tp2, ko, rr = build_trade(df_chart, len(df_chart)-1, direction)
+        if df_chart is not None:
 
-        st.plotly_chart(chart(df_chart, {
-            "Entry": entry,
-            "SL": sl,
-            "TP1": tp1,
-            "TP2": tp2
-        }), use_container_width=True)
+            df_chart = indicators(df_chart)
 
-        st.write({
-            "Direction": direction,
-            "Score": sc,
-            "Entry": entry,
-            "SL": sl,
-            "TP1": tp1,
-            "TP2": tp2,
-            "KO": ko,
-            "RR": rr
-        })
+            direction, sc = score(df_chart, len(df_chart)-1)
+            entry, sl, tp1, tp2, ko, rr = build_trade(df_chart, len(df_chart)-1, direction)
+
+            st.plotly_chart(chart(df_chart, {
+                "Entry": entry,
+                "SL": sl,
+                "TP1": tp1,
+                "TP2": tp2
+            }), use_container_width=True)
+
+            st.write({
+                "Direction": direction,
+                "Score": round(sc,2),
+                "Entry": entry,
+                "SL": sl,
+                "TP1": tp1,
+                "TP2": tp2,
+                "KO": ko,
+                "RR": round(rr,2)
+            })
