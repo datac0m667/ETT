@@ -101,18 +101,18 @@ def indicators(df):
 
     df = df.copy()
 
-    df["EMA20"] = df["Close"].ewm(span=20).mean()
-    df["EMA50"] = df["Close"].ewm(span=50).mean()
+    df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
+    df["EMA50"] = df["Close"].ewm(span=50, adjust=False).mean()
 
-    tr = np.maximum(
-        df["High"] - df["Low"],
-        np.maximum(
-            abs(df["High"] - df["Close"].shift()),
-            abs(df["Low"] - df["Close"].shift())
-        )
-    )
+    prev_close = df["Close"].shift(1)
 
-    df["ATR"] = pd.Series(tr).rolling(14).mean()
+    tr1 = df["High"] - df["Low"]
+    tr2 = (df["High"] - prev_close).abs()
+    tr3 = (df["Low"] - prev_close).abs()
+
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    df["ATR"] = true_range.rolling(14, min_periods=14).mean()
 
     return df.dropna()
 
