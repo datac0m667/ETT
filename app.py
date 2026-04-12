@@ -1,73 +1,83 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
 
 st.set_page_config(layout="wide")
 
+# =========================
+# WATCHLIST GLOBAL
+# =========================
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA",
     "SAP.DE","ADS.DE","ALV.DE",
-    "MC.PA","OR.PA","HSBA.L"
+    "MC.PA","OR.PA","HSBA.L","BP.L",
+    "^GSPC","^NDX"
 ]
 
+# =========================
+# DATA
+# =========================
 def load_data(ticker):
-    return yf.download(ticker, period="3mo", interval="1h")
+    df = yf.download(ticker, period="3mo", interval="1h", progress=False)
+    return df
 
+# =========================
+# INDICATORS (SAFE)
+# =========================
 def indicators(df):
     df = df.copy()
+    df = df.dropna()
 
-    # wichtig: nur echte Close Series erzwingen
     close = df["Close"]
 
-    # falls MultiIndex → fixen
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-
-    close = close.squeeze()
-
-    # EMAs
     df["EMA9"] = close.ewm(span=9).mean()
     df["EMA21"] = close.ewm(span=21).mean()
     df["EMA50"] = close.ewm(span=50).mean()
     df["EMA200"] = close.ewm(span=200).mean()
 
-    # RSI FIX
     df["RSI"] = RSIIndicator(close).rsi()
 
-    # MACD FIX
     macd = MACD(close)
     df["MACD"] = macd.macd()
     df["MACD_SIGNAL"] = macd.macd_signal()
 
+    df = df.dropna()
     return df
 
-def analyze(df):
-    df = df.dropna().copy()
-
-    l = df.iloc[-1]
-
-   def safe(x):
+# =========================
+# SAFE VALUE CONVERSION
+# =========================
+def safe(x):
     try:
         return float(x)
     except:
         return None
 
-    ema50 = safe(l["EMA50"])
-    ema200 = safe(l["EMA200"])
+# =========================
+# ANALYSE ENGINE
+# =========================
+def analyze(df):
+    if df is None or df.empty:
+        return None
+
+    l = df.iloc[-1]
+
     ema9 = safe(l["EMA9"])
     ema21 = safe(l["EMA21"])
+    ema50 = safe(l["EMA50"])
+    ema200 = safe(l["EMA200"])
     rsi = safe(l["RSI"])
     macd = safe(l["MACD"])
     macd_sig = safe(l["MACD_SIGNAL"])
     price = safe(l["Close"])
 
-    # wenn Daten kaputt → skip
-    values = [ema50, ema200, ema9, ema21, rsi, macd, macd_sig, price]
+    values = [ema9, ema21, ema50, ema200, rsi, macd, macd_sig, price]
 
-if any(v is None for v in values):
-    return None
+    if any(v is None for v in values):
+        return None
 
     score = 0
 
@@ -77,9 +87,11 @@ if any(v is None for v in values):
     elif ema50 < ema200:
         score -= 30
 
-    # EMA Struktur
+    # EMA Structure
     if ema9 > ema21:
         score += 20
+    else:
+        score -= 10
 
     # RSI
     if rsi < 35:
@@ -100,11 +112,14 @@ if any(v is None for v in values):
     rr = abs((tp - price) / (price - sl)) if price != sl else 0
 
     ko = sl * 0.995
-    lev = price / (price - ko)
+    lev = price / (price - ko) if price > ko else 0
 
     return price, score, entry, sl, tp, rr, ko, lev
 
-st.title("🚀 Elite KO Trading Tool")
+# =========================
+# UI
+# =========================
+st.title("🚀 Elite KO Trading Scanner (Stable Version)")
 
 custom = st.text_input("Eigene Ticker (z.B. AAPL,TSLA,NVDA)")
 
@@ -120,30 +135,39 @@ if st.button("Scanner starten"):
     for ticker in watchlist:
         df = load_data(ticker)
 
-        if df.empty:
+        if df is None or df.empty:
             continue
 
         df = indicators(df)
-        price, score, entry, sl, tp, rr, ko, lev = analyze(df)
+        result = analyze(df)
 
-        if score >= 50 and rr >= 2:
-            results.append({
-                "Ticker": ticker,
-                "Score": score,
-                "Preis": round(price,2),
-                "Entry": round(entry,2),
-                "SL": round(sl,2),
-                "TP": round(tp,2),
-                "RR": round(rr,2),
-                "KO": round(ko,2),
-                "Hebel": round(lev,1)
-            })
+        if result is None:
+            continue
 
-    df_out = pd.DataFrame(results).sort_values(by="Score", ascending=False)
+        price, score, entry, sl, tp, rr, ko, lev = result
 
-    st.dataframe(df_out, use_container_width=True)
+        # Filter (nur gute Trades)
+        if score < 50:
+            continue
+        if rr < 2:
+            continue
 
-    if not df_out.empty:
-        st.success("🔥 Nur starke Setups angezeigt")
+        results.append({
+            "Ticker": ticker,
+            "Score": round(score, 1),
+            "Preis": round(price, 2),
+            "Entry": round(entry, 2),
+            "SL": round(sl, 2),
+            "TP": round(tp, 2),
+            "RR": round(rr, 2),
+            "KO": round(ko, 2),
+            "Hebel": round(lev, 1)
+        })
+
+    if results:
+        df_out = pd.DataFrame(results).sort_values(by="Score", ascending=False)
+        st.dataframe(df_out, use_container_width=True)
+
+        st.success("🔥 Nur hochwertige KO-Setups angezeigt")
     else:
-        st.warning("Keine guten Trades aktuell")
+        st.warning("Keine starken Setups aktuell")
