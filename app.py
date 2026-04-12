@@ -63,7 +63,7 @@ def indicators(df):
 # ANALYSE ENGINE
 # =========================
 def analyze(df):
-    if df is None or df.empty or len(df) < 210:
+    if df is None or df.empty:
         return None
 
     l = df.iloc[-1]
@@ -83,41 +83,37 @@ def analyze(df):
     macd = f(l["MACD"])
     macd_sig = f(l["MACD_SIGNAL"])
 
-    vals = [price, ema9, ema21, ema50, ema200, rsi, macd, macd_sig]
+    vals = [price, ema9, ema21, ema50, rsi, macd, macd_sig]
 
-    if any(v is None or np.isnan(v) for v in vals):
+    if any(v is None for v in vals):
         return None
 
-    # =========================
-    # SCORE ENGINE
-    # =========================
     score = 0
 
-    # Trend
+    # Trend (WICHTIG: EMA200 NICHT HARD BLOCKEN)
     if ema50 > ema200:
-        score += 30
+        score += 25
     else:
-        score -= 30
+        score -= 10
 
-    # EMA structure
+    # EMA momentum
     if ema9 > ema21:
-        score += 20
+        score += 15
 
-    # RSI logic
-    if rsi < 35:
-        score += 20
-    elif rsi > 70:
-        score -= 20
+    # RSI softer (nicht zu streng!)
+    if rsi < 40:
+        score += 15
+    elif rsi > 75:
+        score -= 10
+    else:
+        score += 5
 
     # MACD
     if macd > macd_sig:
         score += 20
     else:
-        score -= 20
+        score -= 10
 
-    # =========================
-    # TRADE SETUP
-    # =========================
     entry = ema9
     sl = ema21
 
@@ -125,7 +121,7 @@ def analyze(df):
 
     rr = abs((tp - price) / (price - sl)) if price != sl else 0
 
-    ko = sl * 0.995
+    ko = sl * 0.996
     lev = price / (price - ko) if price > ko else 0
 
     return price, score, entry, sl, tp, rr, ko, lev
