@@ -1,11 +1,12 @@
 """
-Trading Scanner – Final: IEX removed, Fail reasons visible in ticker table
+Trading Scanner – Final Clean Version (IEX references removed)
+- Datenquelle: yfinance (Yahoo Finance)
 - Pools: S&P 500 / Nasdaq-100 / EuroStoxx50 (sample lists)
 - Prefilter by marketCap & avgVolume
 - Hourly -> daily fallback for data loading
 - Scan rules configurable via sidebar
-- Analystenratings fetched only for Top-N signals (yfinance)
-- Fail_Reasons column shown in results table
+- Analystenratings fetched nur für Top-N Signale (yfinance)
+- Fail_Reasons sichtbar in Ergebnis-Tabelle
 Start: streamlit run scanner.py
 """
 
@@ -465,7 +466,6 @@ if results.empty:
     st.stop()
 
 # ---------------- Fetch analyst data only for Top-N signals (improved selection) ----------------
-# Auswahl: nur echte Signale (Rules_OK True), sortiert nach Entry-Q und Trend
 results["Analyst_Mean"] = None
 results["Analyst_Key"] = None
 results["Analyst_Count"] = None
@@ -514,16 +514,9 @@ st.markdown(f"""
 
 # ---------------- Table (with Fail_Reasons visible) ----------------
 disp = results.copy()
-# Ensure columns exist for display
 for c in ["Analyst_Mean","Analyst_Key","Analyst_Count","Fail_Reasons"]:
     if c not in disp.columns:
         disp[c] = None
-
-# Format table for HTML display
-def fmt_val(v):
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return "–"
-    return str(v)
 
 table = disp[["Ticker","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Analyst_Mean","Analyst_Key","Analyst_Count","Rules_OK","Fail_Reasons"]].copy()
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
@@ -541,7 +534,6 @@ else:
     price = sf(last["Close"]); atr = sf(last["ATR"])
     levels = build_levels(price, atr, direction)
 
-    # If analyst info missing for selected, fetch on demand (cached)
     rec_mean = results.loc[results["Ticker"] == selected, "Analyst_Mean"].iloc[0] if "Analyst_Mean" in results.columns else None
     rec_key = results.loc[results["Ticker"] == selected, "Analyst_Key"].iloc[0] if "Analyst_Key" in results.columns else None
     rec_count = results.loc[results["Ticker"] == selected, "Analyst_Count"].iloc[0] if "Analyst_Count" in results.columns else None
@@ -560,7 +552,6 @@ else:
     for col, color in [("EMA20","#0b5fff"),("EMA50","#6366f1"),("EMA200","#f59e0b")]:
         fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail[col], line=dict(color=color, width=1.2), name=col), row=1, col=1)
 
-    # Marker: current price with black dot and rating label (if available)
     try:
         last_dt = df_detail["Datetime"].iloc[-1]
         marker_text = f"Rating: {rec_mean:.2f} ({rec_key})" if rec_mean is not None else (f"{rec_key}" if rec_key else "n/a")
