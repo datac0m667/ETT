@@ -1,8 +1,6 @@
+```python
 """
-Trading Scanner v3 – Entry Precision + KO-Zertifikat Panel (final update)
-- Position sizer removed
-- Sidebar: replaced position calculator with KO-Setups (Konservativ / Moderat / Aggressiv)
-- Light gray UI, trading rules enforced and reported
+Trading Scanner v3 – Entry Precision + KO-Zertifikat Panel (sidebar KO-Setups moved, small font)
 Start: streamlit run scanner.py
 """
 
@@ -22,60 +20,53 @@ st.set_page_config(page_title="Trading Scanner", page_icon="📡", layout="wide"
 
 st.markdown("""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 
   html, body, [class*="css"] {
     font-family: 'IBM Plex Sans', sans-serif;
     background-color: #f2f4f6; color: #111827;
+    font-size: 13px;
   }
   .main, [data-testid="stAppViewContainer"] { background-color: #f2f4f6; }
   [data-testid="stSidebar"] { background-color: #e5e7eb; border-right: 1px solid #d1d5db; }
 
-  h1,h2,h3 { font-family: 'IBM Plex Mono', monospace; color: #0b5fff; }
+  h1,h2,h3 { font-family: 'IBM Plex Mono', monospace; color: #0b5fff; font-size:1.05rem; }
+  .topbar { display:flex; align-items:baseline; gap:12px; border-bottom: 1px solid #d1d5db; padding-bottom:10px; margin-bottom:16px; }
+  .topbar-title { font-family:'IBM Plex Mono',monospace; font-size:1.15rem; font-weight:600; color:#0b5fff; }
+  .topbar-sub   { font-size:0.72rem; color:#6b7280; }
 
-  .topbar {
-    display:flex; align-items:baseline; gap:14px;
-    border-bottom: 1px solid #d1d5db; padding-bottom:12px; margin-bottom:20px;
-  }
-  .topbar-title { font-family:'IBM Plex Mono',monospace; font-size:1.35rem; font-weight:600; color:#0b5fff; }
-  .topbar-sub   { font-size:0.75rem; color:#6b7280; }
+  .metric-row { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  .metric { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:8px 12px; flex:1; min-width:80px; }
+  .mlabel { font-size:0.62rem; text-transform:uppercase; letter-spacing:1px; color:#6b7280; }
+  .mvalue { font-family:'IBM Plex Mono',monospace; font-size:1rem; font-weight:600; color:#111827; margin-top:2px; }
 
-  .metric-row { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
-  .metric { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:10px 16px; flex:1; min-width:90px; }
-  .mlabel { font-size:0.65rem; text-transform:uppercase; letter-spacing:1px; color:#6b7280; }
-  .mvalue { font-family:'IBM Plex Mono',monospace; font-size:1.2rem; font-weight:600; color:#111827; margin-top:2px; }
-  .green  { color:#059669 !important; } .red { color:#ef4444 !important; }
-  .blue   { color:#0b5fff !important; } .orange { color:#f59e0b !important; }
+  .card { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:10px 12px; margin-bottom:12px; }
+  .card-title { font-size:0.66rem; text-transform:uppercase; letter-spacing:1px; color:#6b7280; margin-bottom:6px; }
 
-  .card {
-    background:#ffffff; border:1px solid #d1d5db;
-    border-radius:8px; padding:14px 18px; margin-bottom:14px;
-  }
-  .card-title { font-size:0.68rem; text-transform:uppercase; letter-spacing:1px; color:#6b7280; margin-bottom:8px; }
+  .ko-setup { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:8px; margin-bottom:8px; font-size:0.9rem; }
+  .ko-setup h4 { margin:0 0 6px 0; font-family:'IBM Plex Mono',monospace; color:#111827; font-size:0.95rem; }
+  .ko-setup p { margin:0; color:#374151; font-size:0.85rem; }
 
-  .ko-setup { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:10px; margin-bottom:10px; }
-  .ko-setup h4 { margin:0 0 6px 0; font-family:'IBM Plex Mono',monospace; color:#111827; }
-  .ko-setup p { margin:0; color:#374151; font-size:0.9rem; }
-
-  .ko-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; margin-top:8px; }
-  .ko-key { color:#6b7280; font-size:0.85rem; } .ko-val { font-family:'IBM Plex Mono',monospace; color:#111827; text-align:right; }
+  .ko-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:8px; }
+  .ko-key { color:#6b7280; font-size:0.82rem; } .ko-val { font-family:'IBM Plex Mono',monospace; color:#111827; text-align:right; }
 
   .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:0.67rem; margin:2px 2px 2px 0; }
   .pill-green  { background:#ecfdf5; color:#059669; }
   .pill-red    { background:#fef2f2; color:#ef4444; }
   .pill-orange { background:#fffbeb; color:#f59e0b; }
 
-  .link-btn { display:inline-block; padding:6px 14px; border-radius:6px; background:#e5e7eb; border:1px solid #d1d5db; color:#0b5fff; font-size:0.78rem; text-decoration:none; margin-right:6px; margin-top:4px; }
+  .link-btn { display:inline-block; padding:6px 12px; border-radius:6px; background:#e5e7eb; border:1px solid #d1d5db; color:#0b5fff; font-size:0.78rem; text-decoration:none; margin-right:6px; margin-top:4px; }
 
   div.stButton > button {
     background:#ffffff; border:1px solid #d1d5db; color:#111827;
-    border-radius:6px; font-size:0.82rem; transition:all 0.15s;
+    border-radius:6px; font-size:0.82rem; transition:all 0.12s;
   }
   div.stButton > button:hover { border-color:#0b5fff; color:#0b5fff; }
 
   #MainMenu, footer, header { visibility:hidden; }
-  .block-container { padding-top:1.5rem; }
-  [data-testid="stDataFrame"] { border:1px solid #d1d5db; border-radius:8px; overflow:hidden; }
+  .block-container { padding-top:1rem; padding-left:1rem; padding-right:1rem; }
+  [data-testid="stDataFrame"] { border:1px solid #d1d5db; border-radius:8px; overflow:hidden; font-size:0.9rem; }
+  table { font-size:0.9rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -93,7 +84,6 @@ WATCHLIST = {
 }
 ALL_TICKERS = [t for g in WATCHLIST.values() for t in g]
 TICKER_TO_SECTOR = {t: s for s, ts in WATCHLIST.items() for t in ts}
-
 EUR_USD_FALLBACK = 1.09
 
 # ─────────────────────────────────────────────────────────
@@ -237,7 +227,6 @@ def entry_quality(df: pd.DataFrame, direction: str):
     score = 0
     sigs  = []
 
-    # 1) Pullback zur EMA20
     dist = abs(price - ema20) / atr
     if dist < 0.4:
         score += 25; sigs.append(("Nahe EMA20 – idealer Pullback", "good"))
@@ -246,7 +235,6 @@ def entry_quality(df: pd.DataFrame, direction: str):
     else:
         sigs.append(("Weit von EMA20 – Extended Move", "bad"))
 
-    # 2) RSI-Zone
     if direction == "LONG":
         if 40 <= rsi <= 55:
             score += 20; sigs.append((f"RSI {rsi:.0f} – optimale Long-Zone", "good"))
@@ -266,7 +254,6 @@ def entry_quality(df: pd.DataFrame, direction: str):
         else:
             score += 6; sigs.append((f"RSI {rsi:.0f}", "neutral"))
 
-    # 3) MACD dreht in Trade-Richtung
     if macdh is not None and pmacdh is not None:
         if direction == "LONG" and macdh > pmacdh:
             score += 20; sigs.append(("MACD Hist dreht bullisch", "good"))
@@ -275,7 +262,6 @@ def entry_quality(df: pd.DataFrame, direction: str):
         else:
             sigs.append(("MACD läuft gegen Richtung", "bad"))
 
-    # 4) Volatilität komprimiert
     if atr5 and atr:
         rv = atr5 / atr
         if rv < 0.8:
@@ -285,7 +271,6 @@ def entry_quality(df: pd.DataFrame, direction: str):
         else:
             sigs.append(("Hohe kurzfristige Volatilität", "bad"))
 
-    # 5) Volumen
     if vol and volavg and volavg > 0:
         vr = vol / volavg
         if vr > 1.3:
@@ -295,7 +280,6 @@ def entry_quality(df: pd.DataFrame, direction: str):
         else:
             score += 5; sigs.append(("Volumen normal", "neutral"))
 
-    # 6) Bollinger-Position
     if bbpct is not None:
         if direction == "LONG" and bbpct < 0.45:
             score += 10; sigs.append(("Im unteren Bollinger-Band", "good"))
@@ -433,7 +417,6 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
     qqq_chg = market.get("QQQ_chg")
     vix = market.get("VIX")
 
-    # TRADEN WENN: Trend klar (Kurs über EMA20/50/200)
     if direction == "LONG":
         if not (price and ema20 and ema50 and ema200 and price > ema20 > ema50 > ema200):
             ok = False
@@ -443,17 +426,14 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
             ok = False
             reasons.append("Trend nicht klar: Kurs/EMAs nicht in sauberer Short-Struktur.")
 
-    # TRADEN WENN: Volatilität moderat (ATR normal)
     if atr_pct is None or not (0.5 <= atr_pct <= 3.0):
         ok = False
         reasons.append(f"ATR% nicht moderat ({'n/a' if atr_pct is None else f'{atr_pct:.2f}'}).")
 
-    # TRADEN WENN: Momentum positiv (RSI 45–60, MACD positiv)
     if rsi is None or macd is None or msig is None or not (45 <= rsi <= 60 and macd > msig):
         ok = False
         reasons.append(f"Momentum nicht ideal (RSI {rsi}, MACD vs Signal).")
 
-    # NICHT TRADEN WENN: Trend bricht (unter EMAs)
     if direction == "LONG" and price and ema20 and price < ema20:
         ok = False
         reasons.append("Trendbruch: Kurs unter EMA20.")
@@ -461,17 +441,14 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
         ok = False
         reasons.append("Trendbruch: Kurs über EMA20.")
 
-    # NICHT TRADEN WENN: Volatilität hoch (VIX>20)
     if vix is not None and vix > 20:
         ok = False
         reasons.append(f"VIX hoch ({vix:.1f}).")
 
-    # NICHT TRADEN WENN: Momentum negativ (RSI <40 oder >70)
     if rsi is not None and (rsi < 40 or rsi > 70):
         ok = False
         reasons.append(f"Momentum kritisch (RSI {rsi:.1f}).")
 
-    # AKTIE ERFÜLLT VORAUSSETZUNGEN: Marktumfeld gut (SPY/QQQ grün, VIX niedrig)
     good_market = (
         spy_chg is not None and qqq_chg is not None and vix is not None and
         spy_chg > 0 and qqq_chg > 0 and vix < 20
@@ -605,7 +582,7 @@ def build_chart(df, levels, direction):
 
     bg = "#f2f4f6"
     fig.update_layout(
-        height=680, paper_bgcolor=bg, plot_bgcolor="#ffffff",
+        height=640, paper_bgcolor=bg, plot_bgcolor="#ffffff",
         font=dict(family="IBM Plex Mono", color="#111827", size=10),
         legend=dict(bgcolor="rgba(255,255,255,0.8)", font_size=10, x=0.01, y=0.99),
         margin=dict(l=5, r=5, t=10, b=5),
@@ -617,7 +594,7 @@ def build_chart(df, levels, direction):
     return fig
 
 # ─────────────────────────────────────────────────────────
-#  SIDEBAR (Position sizer removed; KO-Setups added)
+#  SIDEBAR (KO-Setups placed where position sizer was)
 # ─────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Scanner")
@@ -625,25 +602,22 @@ with st.sidebar:
     dir_filter = st.radio("Richtung", ["Alle","LONG","SHORT"], horizontal=True)
 
     st.markdown("---")
-    st.markdown("### 🔰 KO-Setups (Konservativ / Moderat / Aggressiv)")
-    st.markdown("""
-    Die folgenden Setups sind Standardvorschläge für KO-Zertifikate.
-    Sie dienen als Orientierung: Barrier-Abstand in Vielfachen der ATR, Hebel grob geschätzt.
-    """)
-    # Show static setup descriptions
-    st.markdown('<div class="ko-setup"><h4>Konservativ 🛡️</h4><p>Barrier ≈ Preis − 2.5 × ATR · Weit, niedriger Hebel, geringes KO-Risiko.</p><div class="ko-grid"><div class="ko-key">Abstand</div><div class="ko-val">≈ 2.5 × ATR</div><div class="ko-key">Hebel</div><div class="ko-val">niedrig</div><div class="ko-key">Eignung</div><div class="ko-val">Sicherheitsorientiert</div></div></div>', unsafe_allow_html=True)
-    st.markdown('<div class="ko-setup"><h4>Moderat ⚖️</h4><p>Barrier ≈ Preis − 1.5 × ATR · Ausgewogenes Verhältnis Risiko/Ertrag.</p><div class="ko-grid"><div class="ko-key">Abstand</div><div class="ko-val">≈ 1.5 × ATR</div><div class="ko-key">Hebel</div><div class="ko-val">mittel</div><div class="ko-key">Eignung</div><div class="ko-val">Standard-Setup</div></div></div>', unsafe_allow_html=True)
-    st.markdown('<div class="ko-setup"><h4>Aggressiv ⚡</h4><p>Barrier ≈ Preis − 0.7 × ATR · Eng, hoher Hebel, hohes KO-Risiko.</p><div class="ko-grid"><div class="ko-key">Abstand</div><div class="ko-val">≈ 0.7 × ATR</div><div class="ko-key">Hebel</div><div class="ko-val">hoch</div><div class="ko-key">Eignung</div><div class="ko-val">Kurzfristige Spekulation</div></div></div>', unsafe_allow_html=True)
+    # Placeholder container for KO setups (will be updated after scan with dynamic proposals)
+    ko_container = st.container()
+    # Static description header (small)
+    ko_container.markdown("### 🔰 KO-Setups (Konservativ / Moderat / Aggressiv)")
+
+    # Static short descriptions (kept compact)
+    ko_container.markdown('<div class="ko-setup"><h4>Konservativ 🛡️</h4><p>Barrier ≈ Preis − 2.5 × ATR · Weit, niedriger Hebel, geringes KO-Risiko.</p></div>', unsafe_allow_html=True)
+    ko_container.markdown('<div class="ko-setup"><h4>Moderat ⚖️</h4><p>Barrier ≈ Preis − 1.5 × ATR · Ausgewogenes Verhältnis Risiko/Ertrag.</p></div>', unsafe_allow_html=True)
+    ko_container.markdown('<div class="ko-setup"><h4>Aggressiv ⚡</h4><p>Barrier ≈ Preis − 0.7 × ATR · Eng, hoher Hebel, hohes KO-Risiko.</p></div>', unsafe_allow_html=True)
 
     st.markdown("---")
     if st.button("🔄 Neu laden"):
         st.cache_data.clear()
         st.rerun()
 
-    st.markdown(
-        '<p style="font-size:0.72rem;color:#6b7280;">Daten alle 5 min gecacht · EUR/USD auto</p>',
-        unsafe_allow_html=True
-    )
+    st.markdown('<p style="font-size:0.72rem;color:#6b7280;">Daten alle 5 min gecacht · EUR/USD auto</p>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────
 #  HEADER
@@ -695,7 +669,33 @@ if results.empty:
     st.stop()
 
 # ─────────────────────────────────────────────────────────
-#  TABLE (kompatibel, ohne Styler applymap issues)
+#  Update sidebar KO-Setups with dynamic proposals for top signal (if available)
+# ─────────────────────────────────────────────────────────
+try:
+    top_ticker = results.iloc[0]["Ticker"]
+    df_top = load(top_ticker)
+    if df_top is not None:
+        df_top = add_indicators(df_top)
+        direction_top, _ = trend_score(df_top)
+        last = df_top.iloc[-1]
+        price_top = sf(last["Close"]); atr_top = sf(last["ATR"])
+        if price_top and atr_top:
+            proposals_top = ko_proposals(price_top, atr_top, direction_top, eur_usd)
+            # Replace ko_container content with dynamic block
+            with st.sidebar:
+                st.markdown("### 🔰 KO-Setups (Top Signal)")
+                for p in proposals_top:
+                    st.markdown(
+                        f'<div class="ko-setup"><h4>{p["name"]}</h4><div class="ko-grid"><div class="ko-key">Barrier</div><div class="ko-val">{p["barrier"]}</div><div class="ko-key">Strike</div><div class="ko-val">{p["strike"]}</div><div class="ko-key">Abstand</div><div class="ko-val">{p["abstand"]}%</div><div class="ko-key">Hebel</div><div class="ko-val">{p["hebel"]}</div><div class="ko-key">Preis</div><div class="ko-val">{p['cert_price']} €</div></div></div>',
+                        unsafe_allow_html=True
+                    )
+                st.markdown("---")
+except Exception:
+    # If anything fails, keep the static descriptions already present
+    pass
+
+# ─────────────────────────────────────────────────────────
+#  TABLE (kompatibel, without Styler applymap issues)
 # ─────────────────────────────────────────────────────────
 disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK"]].copy()
 
@@ -787,7 +787,7 @@ else:
         pills.append(f'<span class="pill {cls}">{txt}</span>')
     st.markdown(" ".join(pills), unsafe_allow_html=True)
 
-    st.markdown("#### KO-Vorschläge")
+    st.markdown("#### KO-Vorschläge (dieses Ticker-Setup)")
     for p in proposals:
         st.markdown(
             f"""
@@ -813,3 +813,4 @@ else:
         st.error("Nicht alle Trading-Regeln erfüllt – kein sauberes KO-Setup.")
         if row["Fail_Reasons"]:
             st.write(row["Fail_Reasons"])
+```
