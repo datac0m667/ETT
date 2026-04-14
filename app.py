@@ -1,6 +1,10 @@
 """
-Trading Scanner v7.1 – Pools (S&P / Nasdaq / EuroStoxx) + optional market check,
-configurable RSI/ATR prefilters, hourly->daily fallback, silent info fetch failures removed.
+Trading Scanner v8 – Analystenratings integriert
+- Datenquelle: yfinance (Yahoo Finance)
+- Analystenratings werden gecached und in Scan + Detailansicht angezeigt
+- Im Chart wird der aktuelle Kurs mit einem schwarzen Punkt und Rating-Label markiert
+- Pools: S&P 500 / Nasdaq-100 / EuroStoxx50 (sample lists)
+- Prefilter, optionaler Markt-Check, RSI/ATR-Parameter, hourly->daily fallback
 Start: streamlit run scanner.py
 """
 
@@ -9,11 +13,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from urllib.parse import quote
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# ---------------- Page config & theme ----------------
+# ---------------- Page config & Theme ----------------
 st.set_page_config(page_title="Trading Scanner", page_icon="📡", layout="wide")
 
 st.markdown("""
@@ -37,7 +40,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------- Pools (sample lists) ----------------
-# NOTE: For production, replace sample lists with full index constituents (CSV).
 SP500_TICKERS = [
     "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","BRK-B","JPM","JNJ","V","PG","UNH","HD","MA",
     "DIS","PYPL","ADBE","CMCSA","NFLX","INTC","PFE","KO","PEP","CSCO","XOM","CVX","ABBV","T","NKE",
@@ -52,7 +54,6 @@ NASDAQ100_TICKERS = [
     "DOCU","ZM","SNPS","MELI","EA","ROST","EXC","MNST","CTSH","WDAY"
 ]
 
-# EuroStoxx50 sample tickers with exchange suffixes (common yfinance format)
 EUROSTOXX50_TICKERS = [
     "ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI",
     "IBE.MC","TOTF.PA","VOW3.DE","BAS.DE","DTE.DE","MC.PA","PHIA.AS","CRH.I","AD.AS","ABI.BR",
@@ -90,10 +91,6 @@ def to_series(df, col):
 # ---------------- Data loader with hourly -> daily fallback ----------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load(ticker: str):
-    """
-    Try hourly 120d first (for intraday precision). If insufficient rows or empty,
-    fallback to daily 720d to ensure indicators (EMA200, ATR14) can be computed.
-    """
     try:
         df = yf.download(ticker, period="120d", interval="1h", progress=False)
     except Exception:
@@ -113,12 +110,10 @@ def load(ticker: str):
     for col in ["Open","High","Low","Close","Volume"]:
         if col in df.columns:
             df[col] = to_series(df, col)
-    # Ensure Datetime column name consistency
     if "Datetime" not in df.columns and "Date" in df.columns:
         df = df.rename(columns={"Date": "Datetime"})
     if "Datetime" not in df.columns and "index" in df.columns:
         df = df.rename(columns={"index": "Datetime"})
-    # Keep only required columns and drop rows with NaNs
     cols = [c for c in ["Datetime","Open","High","Low","Close","Volume"] if c in df.columns]
     df = df.loc[:, cols].dropna()
     if df.empty:
@@ -181,6 +176,41 @@ def market_metrics():
         return {"SPY_chg": last_change(spy), "QQQ_chg": last_change(qqq), "VIX": sf(vix["Close"].iloc[-1]) if not vix.empty else None}
     except Exception:
         return {"SPY_chg": None, "QQQ_chg": None, "VIX": None}
+
+# ---------------- Analysteninfo (gecached) ----------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_ticker_info(ticker: str):
+    """
+    Liefert recommendationMean, recommendationKey, recommendationCount und ggf. letzte Empfehlung.
+    Caching reduziert wiederholte yfinance.info Aufrufe.
+    """
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        rec_mean = info.get("recommendationMean")
+        rec_key = info.get("recommendationKey")
+        rec_count = info.get("recommendationCount")
+        # historische Empfehlungen (optional, kann leer sein)
+        last_rec = None
+        try:
+            rec_hist = t.recommendations
+            if rec_hist is not None and not rec_hist.empty:
+                last_row = rec_hist.iloc[-1]
+                last_rec = {
+                    "date": str(last_row.name) if last_row.name is not None else None,
+                    "firm": last_row.get("firm") if "firm" in last_row.index else None,
+                    "action": last_row.get("action") if "action" in last_row.index else None,
+                }
+        except Exception:
+            last_rec = None
+        return {
+            "rec_mean": rec_mean,
+            "rec_key": rec_key,
+            "rec_count": rec_count,
+            "last_rec": last_rec,
+        }
+    except Exception:
+        return {"rec_mean": None, "rec_key": None, "rec_count": None, "last_rec": None}
 
 # ---------------- Entry quality / trend / levels ----------------
 def entry_quality(df: pd.DataFrame, direction: str):
@@ -251,8 +281,9 @@ def trend_score(df: pd.DataFrame):
     r = df.iloc[-1]; prev = df.iloc[-2]
     price = sf(r["Close"]); ema20 = sf(r["EMA20"]); ema50 = sf(r["EMA50"])
     ema200 = sf(r["EMA200"]); rsi = sf(r["RSI"]); macd = sf(r["MACD"])
-    msig = sf(r["MACD_signal"]); macdh = sf(r["MACD_hist"])
-    pmacdh = sf(prev["MACD_hist"]); atr = sf(r["ATR"]); bbpct = sf(r["BB_pct"])
+    msig = sf(r["MACD_signal"]); macdh = sf(df["MACD_hist"].iloc[-1]) if "MACD_hist" in df.columns else None
+    pmacdh = sf(prev["MACD_hist"]) if "MACD_hist" in df.columns else None
+    atr = sf(r["ATR"]); bbpct = sf(r["BB_pct"])
     if None in [price, ema20, ema50, ema200, rsi, macd, msig, atr]:
         return None, 0
     direction = "LONG" if price > ema50 else "SHORT"
@@ -275,10 +306,10 @@ def trend_score(df: pd.DataFrame):
         elif 55 <= rsi < 65: s += 10
     if direction == "LONG":
         if macd > msig: s += 12
-        if macdh and pmacdh and macdh > pmacdh: s += 8
+        if macdh is not None and pmacdh is not None and macdh > pmacdh: s += 8
     else:
         if macd < msig: s += 12
-        if macdh and pmacdh and macdh < pmacdh: s += 8
+        if macdh is not None and pmacdh is not None and macdh < pmacdh: s += 8
     if bbpct is not None and 0.3 < bbpct < 0.7:
         s += 10
     atr_pct = atr / price * 100
@@ -294,13 +325,9 @@ def build_levels(price, atr, direction: str):
     rr = abs(tp2 - price) / abs(price - sl) if abs(price - sl) > 1e-9 else None
     return dict(entry=price, sl=sl, tp1=tp1, tp2=tp2, ko=ko, rr=rr)
 
-# ---------------- Prefilter with silent info failures ----------------
+# ---------------- Prefilter ----------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
-    """
-    Returns tuple (kept_list, removed_list, checked_count)
-    Uses yfinance Ticker.info; info fetch failures are treated silently (not added to removed list).
-    """
     keep = []
     removed = []
     checked = 0
@@ -311,7 +338,7 @@ def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
         try:
             info = yf.Ticker(t).info
         except Exception:
-            # silent: skip adding an 'info_error' entry to removed list
+            # silent skip on info fetch failure
             continue
         mcap = info.get("marketCap") or info.get("market_cap")
         avgvol = info.get("averageVolume") or info.get("averageVolume10days") or info.get("volume")
@@ -327,7 +354,7 @@ def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
             removed.append((t, "error"))
     return keep, removed, checked
 
-# ---------------- Rule engine (configurable) ----------------
+# ---------------- Rule engine ----------------
 def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, market: dict,
                    require_market=True, rsi_min=45, rsi_max=60, atr_min=0.5, atr_max=3.0):
     reasons = []; ok = True
@@ -336,7 +363,6 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
     atr_pct = (atr / price * 100) if price and atr else None
     spy_chg = market.get("SPY_chg"); qqq_chg = market.get("QQQ_chg"); vix = market.get("VIX")
 
-    # Trend structure
     if direction == "LONG":
         if not (price and ema20 and ema50 and ema200 and price > ema20 > ema50 > ema200):
             ok = False; reasons.append("Trend nicht klar: Long-Struktur fehlt.")
@@ -344,29 +370,23 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
         if not (price and ema20 and ema50 and ema200 and price < ema20 < ema50 < ema200):
             ok = False; reasons.append("Trend nicht klar: Short-Struktur fehlt.")
 
-    # ATR% range
     if atr_pct is None or not (atr_min <= atr_pct <= atr_max):
         ok = False; reasons.append(f"ATR% nicht moderat ({'n/a' if atr_pct is None else f'{atr_pct:.2f}'}).")
 
-    # RSI + MACD
     if rsi is None or macd is None or msig is None or not (rsi_min <= rsi <= rsi_max and macd > msig):
         ok = False; reasons.append(f"Momentum nicht ideal (RSI {rsi}, MACD vs Signal).")
 
-    # Trend break
     if direction == "LONG" and price and ema20 and price < ema20:
         ok = False; reasons.append("Trendbruch: Kurs unter EMA20.")
     if direction == "SHORT" and price and ema20 and price > ema20:
         ok = False; reasons.append("Trendbruch: Kurs über EMA20.")
 
-    # VIX check
     if vix is not None and vix > 20:
         ok = False; reasons.append(f"VIX hoch ({vix:.1f}).")
 
-    # RSI extremes
     if rsi is not None and (rsi < 40 or rsi > 70):
         ok = False; reasons.append(f"Momentum kritisch (RSI {rsi:.1f}).")
 
-    # Market environment (optional)
     if require_market:
         good_market = (spy_chg is not None and qqq_chg is not None and vix is not None and spy_chg > 0 and qqq_chg > 0 and vix < 20)
         if not good_market:
@@ -374,7 +394,7 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
 
     return ok, reasons
 
-# ---------------- Scan ----------------
+# ---------------- Scan (mit Analysteninfo) ----------------
 @st.cache_data(ttl=300, show_spinner=False)
 def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min, atr_max):
     results = []
@@ -402,6 +422,13 @@ def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min,
             p0 = sf(prev.iloc[-1]["Close"])
             if p0:
                 chg = (price - p0) / p0 * 100
+
+        # Analysteninfo nur hier abfragen (gecached)
+        info = fetch_ticker_info(ticker)
+        rec_mean = info.get("rec_mean")
+        rec_key = info.get("rec_key")
+        rec_count = info.get("rec_count")
+
         rules_ok, reasons = evaluate_rules(df, direction, price, atr, market,
                                            require_market=require_market,
                                            rsi_min=rsi_min, rsi_max=rsi_max,
@@ -417,6 +444,9 @@ def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min,
             "ATR%": round(atr / price * 100, 2),
             "RR": round(levels["rr"], 1) if levels["rr"] is not None else None,
             "Chg%": round(chg, 2) if chg else None,
+            "Analyst_Mean": round(rec_mean, 2) if rec_mean is not None else None,
+            "Analyst_Key": rec_key,
+            "Analyst_Count": rec_count,
             "Rules_OK": rules_ok,
             "Fail_Reasons": "; ".join(reasons) if reasons else "",
         })
@@ -460,8 +490,7 @@ with st.spinner("Prefilter läuft (MarketCap / AvgVolume)…"):
     removed_count = len(removed_list)
     st.write(f"Prefilter geprüft: {checked} tickers · entfernt: {removed_count}")
     if removed_count:
-        # filter out any 'info_error' entries (we no longer add them), show top removal reasons
-        reasons = [r for (_, r) in removed_list if r != "info_error"]
+        reasons = [r for (_, r) in removed_list]
         rc = {}
         for r in reasons:
             rc[r] = rc.get(r, 0) + 1
@@ -477,7 +506,7 @@ with st.spinner("Prefilter läuft (MarketCap / AvgVolume)…"):
 with st.spinner("Scanner läuft …"):
     results = run_scan(min_score, pool_prefiltered, require_market, rsi_min, rsi_max, atr_min, atr_max)
 
-# ---------------- If no results, show concise guidance and stop ----------------
+# ---------------- If no results, guidance and stop ----------------
 if results.empty:
     st.warning("Keine Signale gefunden. Mögliche Ursachen: Regeln zu strikt, Prefilter entfernt viele Kandidaten oder Datenqualität.")
     st.stop()
@@ -505,8 +534,8 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------- Table (HTML colored) ----------------
-disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK","Fail_Reasons"]].copy()
+# ---------------- Table (inkl. Analysteninfo) ----------------
+disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Analyst_Mean","Analyst_Key","Analyst_Count","Rules_OK"]].copy()
 
 def color_dir_html(v):
     if v == "LONG": return '<span style="color:#0b5fff;font-weight:600">LONG</span>'
@@ -549,12 +578,14 @@ table = pd.DataFrame({
     "ATR%": disp["ATR%"].apply(lambda x: f"{x:.2f}%"),
     "RR": disp["RR"].apply(lambda x: f"{x:.1f}" if x is not None else "–"),
     "Chg%": disp["Chg%"].apply(color_chg_html),
+    "Analyst Mean": results["Analyst_Mean"].apply(lambda x: f"{x:.2f}" if x is not None else "–"),
+    "Analyst Key": results["Analyst_Key"].fillna("–"),
+    "Analyst Count": results["Analyst_Count"].apply(lambda x: str(x) if x is not None else "–"),
     "Rules": disp["Rules_OK"].apply(color_rules_html),
-    "Fail_Reasons": disp["Fail_Reasons"],
 })
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-# ---------------- Detail view ----------------
+# ---------------- Detail view (mit schwarzem Punkt für Analystenrating) ----------------
 selected = st.selectbox("Detailansicht Ticker", options=list(results["Ticker"]), index=0)
 df_detail = load(selected)
 if df_detail is None:
@@ -567,17 +598,57 @@ else:
     price = sf(last["Close"]); atr = sf(last["ATR"])
     levels = build_levels(price, atr, direction)
 
+    # fetch analyst info for selected ticker (cached)
+    ainfo = fetch_ticker_info(selected)
+    rec_mean = ainfo.get("rec_mean")
+    rec_key = ainfo.get("rec_key")
+    rec_count = ainfo.get("rec_count")
+
     st.markdown(f"### {selected} – {direction} – TrendScore {ts} – EntryQ {eq_score}")
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6,0.2,0.2], vertical_spacing=0.03)
-    fig.add_trace(go.Candlestick(x=df_detail["Datetime"], open=df_detail["Open"], high=df_detail["High"], low=df_detail["Low"], close=df_detail["Close"], name="Preis"), row=1, col=1)
+
+    # Candles + EMAs + Bollinger
+    fig.add_trace(go.Candlestick(
+        x=df_detail["Datetime"], open=df_detail["Open"], high=df_detail["High"],
+        low=df_detail["Low"], close=df_detail["Close"], name="Preis",
+        increasing_line_color="#059669", decreasing_line_color="#ef4444"
+    ), row=1, col=1)
     for col, color in [("EMA20","#0b5fff"),("EMA50","#6366f1"),("EMA200","#f59e0b")]:
         fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail[col], line=dict(color=color, width=1.2), name=col), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["BB_upper"], line=dict(color="#9ca3af", width=1, dash="dot"), showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["BB_lower"], line=dict(color="#9ca3af", width=1, dash="dot"), fill="tonexty", fillcolor="rgba(156,163,175,0.10)", showlegend=False), row=1, col=1)
+
+    # Markiere aktuellen Kurs mit schwarzem Punkt und Rating-Label (falls vorhanden)
+    try:
+        last_dt = df_detail["Datetime"].iloc[-1]
+        marker_text = f"Rating: {rec_mean:.2f} ({rec_key})" if rec_mean is not None else (f"{rec_key}" if rec_key else "n/a")
+        marker_size = 10 if rec_count is None else min(max(6, int(4 + np.log1p(rec_count)*2)), 18)
+        fig.add_trace(go.Scatter(
+            x=[last_dt], y=[price],
+            mode="markers+text",
+            marker=dict(color="black", size=marker_size),
+            text=[marker_text],
+            textposition="top center",
+            name="Analyst Rating"
+        ), row=1, col=1)
+    except Exception:
+        pass
+
+    # RSI
     fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["RSI"], line=dict(color="#0b5fff", width=1.2), name="RSI"), row=2, col=1)
+    for lvl, col in [(70,"#ef4444"),(50,"#9ca3af"),(30,"#059669")]:
+        fig.add_hline(y=lvl, line_color=col, line_dash="dot", line_width=1, row=2, col=1)
+
+    # MACD hist + MACD lines
     hist_c = ["#059669" if v >= 0 else "#ef4444" for v in df_detail["MACD_hist"]]
     fig.add_trace(go.Bar(x=df_detail["Datetime"], y=df_detail["MACD_hist"], marker_color=hist_c, name="MACD_hist"), row=3, col=1)
-    fig.update_layout(height=640, paper_bgcolor="#f2f4f6", plot_bgcolor="#ffffff", margin=dict(l=5,r=5,t=10,b=5), xaxis_rangeslider_visible=False)
+    fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["MACD"], line=dict(color="#0b5fff", width=1.2), name="MACD"), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["MACD_signal"], line=dict(color="#f59e0b", width=1.2), name="Signal"), row=3, col=1)
+
+    fig.update_layout(height=700, paper_bgcolor="#f2f4f6", plot_bgcolor="#ffffff", margin=dict(l=5,r=5,t=10,b=5), xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
+    # Entry quality pills
     st.markdown("#### Entry-Qualität")
     pills = []
     for txt, kind in eq_sigs:
@@ -585,6 +656,15 @@ else:
         pills.append(f'<span style="{cls} margin-right:6px;">{txt}</span>')
     st.markdown(" ".join(pills), unsafe_allow_html=True)
 
+    # Analysteninfo anzeigen
+    st.markdown("#### Analystenrating")
+    st.write(f"- **Mean**: {rec_mean if rec_mean is not None else 'n/a'}")
+    st.write(f"- **Key**: {rec_key if rec_key else 'n/a'}")
+    st.write(f"- **Count**: {rec_count if rec_count is not None else 'n/a'}")
+    if ainfo.get("last_rec"):
+        st.write(f"- **Letzte Empfehlung**: {ainfo['last_rec']}")
+
+    # Regel-Check
     st.markdown("#### Regel-Check (Scan)")
     row = results[results["Ticker"] == selected].iloc[0]
     if row["Rules_OK"]:
