@@ -1,4 +1,3 @@
-```python
 """
 Trading Scanner v3 – Entry Precision + KO-Zertifikat Panel (sidebar KO-Setups moved, small font)
 Start: streamlit run scanner.py
@@ -813,4 +812,3 @@ else:
         st.error("Nicht alle Trading-Regeln erfüllt – kein sauberes KO-Setup.")
         if row["Fail_Reasons"]:
             st.write(row["Fail_Reasons"])
-```
