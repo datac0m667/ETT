@@ -1,5 +1,5 @@
 """
-Trading Scanner – Final Clean Version (IEX references removed)
+Trading Scanner – Final Clean Version
 - Datenquelle: yfinance (Yahoo Finance)
 - Pools: S&P 500 / Nasdaq-100 / EuroStoxx50 (sample lists)
 - Prefilter by marketCap & avgVolume
@@ -465,7 +465,7 @@ if results.empty:
     st.warning("Keine Signale gefunden. Regeln anpassen oder Pool wechseln.")
     st.stop()
 
-# ---------------- Fetch analyst data only for Top-N signals (improved selection) ----------------
+# ---------------- Fetch analyst data only for Top-N signals ----------------
 results["Analyst_Mean"] = None
 results["Analyst_Key"] = None
 results["Analyst_Count"] = None
@@ -521,7 +521,7 @@ for c in ["Analyst_Mean","Analyst_Key","Analyst_Count","Fail_Reasons"]:
 table = disp[["Ticker","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Analyst_Mean","Analyst_Key","Analyst_Count","Rules_OK","Fail_Reasons"]].copy()
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-# ---------------- Detail view (on-demand analyst fetch if missing) ----------------
+# ---------------- Detail view ----------------
 selected = st.selectbox("Detailansicht Ticker", options=list(results["Ticker"]), index=0)
 df_detail = load(selected)
 if df_detail is None:
@@ -591,4 +591,3 @@ else:
         st.error("Nicht alle Trading-Regeln erfüllt – kein sauberes KO-Setup.")
         if row["Fail_Reasons"]:
             st.write(row["Fail_Reasons"])
-```
