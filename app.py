@@ -295,53 +295,70 @@ st.markdown(f"<div class='card'><b>Signale:</b> {len(results)} — <b>Regeln erf
 # ---------- TABLE ----------
 disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK","Fail_Reasons"]].copy()
 
-# NOTE: Styler.apply with axis=None passes a DataFrame subset to the function.
-# The function must return a DataFrame of same shape with style strings.
-def sd_df(subdf: pd.DataFrame) -> pd.DataFrame:
-    return subdf.applymap(lambda v: "color:#0b5fff;font-weight:600" if v=="LONG" else ("color:#ef4444;font-weight:600" if v=="SHORT" else ""))
-
-def ss_df(subdf: pd.DataFrame) -> pd.DataFrame:
-    def f(v):
+# Robust styler helpers: accept Series or DataFrame and return same-shaped object with style strings
+def _to_df_like_with_styles(obj, func):
+    """
+    Helper: if obj is Series -> return Series of styles
+                if obj is DataFrame -> return DataFrame of styles
+    func: element-wise function that returns style string for a single value
+    """
+    if isinstance(obj, pd.Series):
+        return obj.map(lambda v: func(v))
+    elif isinstance(obj, pd.DataFrame):
+        return obj.applymap(lambda v: func(v))
+    else:
+        # fallback: try to convert to DataFrame
         try:
-            v = float(v)
-            if v>=80: return "color:#059669;font-weight:600"
-            if v>=65: return "color:#0b5fff"
+            df = pd.DataFrame(obj)
+            return df.applymap(lambda v: func(v))
         except Exception:
-            pass
+            return obj
+
+def sd_style(v):
+    if v == "LONG": return "color:#0b5fff;font-weight:600"
+    if v == "SHORT": return "color:#ef4444;font-weight:600"
+    return ""
+
+def ss_style(v):
+    try:
+        vv = float(v)
+        if vv >= 80: return "color:#059669;font-weight:600"
+        if vv >= 65: return "color:#0b5fff"
+    except Exception:
+        pass
+    return ""
+
+def se_style(v):
+    try:
+        vv = float(v)
+        if vv >= 70: return "color:#059669;font-weight:600"
+        if vv >= 50: return "color:#f59e0b"
+    except Exception:
+        pass
+    return "color:#ef4444"
+
+def sc2_style(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)): return ""
+    try:
+        return "color:#059669" if float(v) > 0 else "color:#ef4444"
+    except Exception:
         return ""
-    return subdf.applymap(f)
 
-def se_df(subdf: pd.DataFrame) -> pd.DataFrame:
-    def f(v):
-        try:
-            v = float(v)
-            if v>=70: return "color:#059669;font-weight:600"
-            if v>=50: return "color:#f59e0b"
-        except Exception:
-            pass
-        return "color:#ef4444"
-    return subdf.applymap(f)
+def ok_style(v):
+    return "background-color:#ecfdf5;color:#065f46" if v else "background-color:#fff1f2;color:#7f1d1d"
 
-def sc2_df(subdf: pd.DataFrame) -> pd.DataFrame:
-    def f(v):
-        if v is None or (isinstance(v, float) and np.isnan(v)): return ""
-        try:
-            return "color:#059669" if float(v)>0 else "color:#ef4444"
-        except Exception:
-            return ""
-    return subdf.applymap(f)
+# Apply styles using functions that handle both Series and DataFrame subsets
+styled = disp.style
 
-def ok_style_df(subdf: pd.DataFrame) -> pd.DataFrame:
-    return subdf.applymap(lambda v: "background-color:#ecfdf5;color:#065f46" if v else "background-color:#fff1f2;color:#7f1d1d")
+# For each subset, use a wrapper that accepts the subset (Series or DataFrame) and returns same-shaped styles
+styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, sd_style), subset=["Dir"], axis=None)
+styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, ss_style), subset=["Trend"], axis=None)
+styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, se_style), subset=["Entry-Q"], axis=None)
+styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, sc2_style), subset=["Chg%"], axis=None)
+styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, ok_style), subset=["Rules_OK"], axis=None)
 
-styled = (disp.style
-          .apply(sd_df, subset=["Dir"], axis=None)
-          .apply(ss_df, subset=["Trend"], axis=None)
-          .apply(se_df, subset=["Entry-Q"], axis=None)
-          .apply(sc2_df, subset=["Chg%"], axis=None)
-          .apply(ok_style_df, subset=["Rules_OK"], axis=None)
-          .format({"Price":"{:.2f}","RSI":"{:.1f}","ATR%":"{:.2f}%","RR":"{:.1f}","Chg%":lambda x: f"{x:+.2f}%" if x is not None else "–"})
-          .set_properties(**{"background-color":"#ffffff","color":"#0f1720"}))
+styled = styled.format({"Price":"{:.2f}","RSI":"{:.1f}","ATR%":"{:.2f}%","RR":"{:.1f}","Chg%":lambda x: f"{x:+.2f}%" if x is not None else "–"})
+styled = styled.set_properties(**{"background-color":"#ffffff","color":"#0f1720"})
 
 st.dataframe(styled, use_container_width=True, height=min(520, 42+len(disp)*38))
 
