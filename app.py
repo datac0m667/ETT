@@ -1,5 +1,5 @@
 """
-Trading Scanner v3 – Entry Precision + KO-Zertifikat Panel
+Trading Scanner v3 – Entry Precision + KO-Zertifikat Panel (refactored)
 Starten: streamlit run scanner.py
 """
 
@@ -37,18 +37,18 @@ st.markdown("""
   .topbar-title { font-family:'IBM Plex Mono',monospace; font-size:1.35rem; font-weight:600; color:#58a6ff; }
   .topbar-sub   { font-size:0.75rem; color:#484f58; }
 
-  .card {
-    background:#161b22; border:1px solid #21262d;
-    border-radius:8px; padding:14px 18px; margin-bottom:14px;
-  }
-  .card-title { font-size:0.68rem; text-transform:uppercase; letter-spacing:1px; color:#484f58; margin-bottom:8px; }
-
   .metric-row { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
   .metric { background:#161b22; border:1px solid #21262d; border-radius:8px; padding:10px 16px; flex:1; min-width:90px; }
   .mlabel { font-size:0.65rem; text-transform:uppercase; letter-spacing:1px; color:#484f58; }
   .mvalue { font-family:'IBM Plex Mono',monospace; font-size:1.2rem; font-weight:600; color:#c9d1d9; margin-top:2px; }
   .green  { color:#3fb950 !important; } .red { color:#f85149 !important; }
   .blue   { color:#58a6ff !important; } .orange { color:#ffa657 !important; }
+
+  .card {
+    background:#161b22; border:1px solid #21262d;
+    border-radius:8px; padding:14px 18px; margin-bottom:14px;
+  }
+  .card-title { font-size:0.68rem; text-transform:uppercase; letter-spacing:1px; color:#484f58; margin-bottom:8px; }
 
   .level-row {
     display:flex; justify-content:space-between; align-items:center;
@@ -128,36 +128,43 @@ EUR_USD_FALLBACK = 1.09
 # ─────────────────────────────────────────────────────────
 def sf(x):
     try:
-        if isinstance(x, pd.Series): x = x.iloc[0]
-        if pd.isna(x): return None
+        if isinstance(x, pd.Series):
+            x = x.iloc[0]
+        if pd.isna(x):
+            return None
         return float(x)
-    except: return None
+    except Exception:
+        return None
 
-def flatten(df):
+def flatten(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
     return df.loc[:, ~df.columns.duplicated()]
 
 def to_series(df, col):
     s = df[col]
-    if isinstance(s, pd.DataFrame): s = s.iloc[:,0]
+    if isinstance(s, pd.DataFrame):
+        s = s.iloc[:, 0]
     return pd.to_numeric(s, errors="coerce")
 
 # ─────────────────────────────────────────────────────────
 #  DATA
 # ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
-def load(ticker):
+def load(ticker: str):
     try:
         df = yf.download(ticker, period="120d", interval="1h", progress=False)
-        if df is None or df.empty: return None
+        if df is None or df.empty:
+            return None
         df = df.reset_index()
         df = flatten(df)
         for col in ["Open","High","Low","Close","Volume"]:
-            if col in df.columns: df[col] = to_series(df, col)
+            if col in df.columns:
+                df[col] = to_series(df, col)
         df = df[["Datetime","Open","High","Low","Close","Volume"]].dropna()
         return df
-    except: return None
+    except Exception:
+        return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_eur_usd():
@@ -165,12 +172,13 @@ def get_eur_usd():
         df = yf.download("EURUSD=X", period="2d", interval="1h", progress=False)
         df = flatten(df)
         return sf(df["Close"].iloc[-1]) or EUR_USD_FALLBACK
-    except: return EUR_USD_FALLBACK
+    except Exception:
+        return EUR_USD_FALLBACK
 
 # ─────────────────────────────────────────────────────────
 #  INDICATORS
 # ─────────────────────────────────────────────────────────
-def add_indicators(df):
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     c = df["Close"]
 
@@ -179,9 +187,14 @@ def add_indicators(df):
     df["EMA200"] = c.ewm(span=200, adjust=False).mean()
 
     prev = c.shift(1)
-    tr = pd.concat([df["High"]-df["Low"],
-                    (df["High"]-prev).abs(),
-                    (df["Low"]-prev).abs()], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            df["High"] - df["Low"],
+            (df["High"] - prev).abs(),
+            (df["Low"] - prev).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     df["ATR"]  = tr.rolling(14).mean()
     df["ATR5"] = tr.rolling(5).mean()
 
@@ -189,7 +202,7 @@ def add_indicators(df):
     gain  = delta.clip(lower=0).rolling(14).mean()
     loss  = (-delta.clip(upper=0)).rolling(14).mean()
     rs    = gain / loss.replace(0, np.nan)
-    df["RSI"] = 100 - (100/(1+rs))
+    df["RSI"] = 100 - (100 / (1 + rs))
 
     ema12 = c.ewm(span=12, adjust=False).mean()
     ema26 = c.ewm(span=26, adjust=False).mean()
@@ -199,8 +212,8 @@ def add_indicators(df):
 
     sma20 = c.rolling(20).mean()
     std20 = c.rolling(20).std()
-    df["BB_upper"] = sma20 + 2*std20
-    df["BB_lower"] = sma20 - 2*std20
+    df["BB_upper"] = sma20 + 2 * std20
+    df["BB_lower"] = sma20 - 2 * std20
     df["BB_pct"]   = (c - df["BB_lower"]) / (df["BB_upper"] - df["BB_lower"])
 
     df["Vol_avg"] = df["Volume"].rolling(20).mean()
@@ -210,11 +223,7 @@ def add_indicators(df):
 # ─────────────────────────────────────────────────────────
 #  ENTRY QUALITY SCORE
 # ─────────────────────────────────────────────────────────
-def entry_quality(df, direction):
-    """
-    Bewertet den aktuellen Zeitpunkt für den Entry unabhängig vom Trend-Score.
-    Hoher Trend-Score + niedriger Entry-Score = Setup gut, aber noch warten.
-    """
+def entry_quality(df: pd.DataFrame, direction: str):
     r     = df.iloc[-1]
     prev  = df.iloc[-2]
     price = sf(r["Close"]); ema20=sf(r["EMA20"]); atr=sf(r["ATR"])
@@ -222,7 +231,8 @@ def entry_quality(df, direction):
     macdh = sf(r["MACD_hist"]); pmacdh=sf(prev["MACD_hist"])
     bbpct = sf(r["BB_pct"]); vol=sf(r["Volume"]); volavg=sf(r["Vol_avg"])
 
-    if None in [price, ema20, atr, rsi]: return 0, []
+    if None in [price, ema20, atr, rsi]:
+        return 0, []
 
     score = 0
     sigs  = []
@@ -265,7 +275,7 @@ def entry_quality(df, direction):
         else:
             sigs.append(("MACD läuft gegen Richtung", "bad"))
 
-    # 4) Volatilität komprimiert = guter Entry
+    # 4) Volatilität komprimiert
     if atr5 and atr:
         rv = atr5 / atr
         if rv < 0.8:
@@ -297,60 +307,69 @@ def entry_quality(df, direction):
 # ─────────────────────────────────────────────────────────
 #  TREND SCORE
 # ─────────────────────────────────────────────────────────
-def trend_score(df):
+def trend_score(df: pd.DataFrame):
     r     = df.iloc[-1]; prev = df.iloc[-2]
     price = sf(r["Close"]); ema20=sf(r["EMA20"]); ema50=sf(r["EMA50"])
     ema200=sf(r["EMA200"]); rsi=sf(r["RSI"]); macd=sf(r["MACD"])
-    msig  =sf(r["MACD_signal"]); macdh=sf(r["MACD_hist"])
+    msig  = sf(r["MACD_signal"]); macdh=sf(r["MACD_hist"])
     pmacdh=sf(prev["MACD_hist"]); atr=sf(r["ATR"]); bbpct=sf(r["BB_pct"])
 
-    if None in [price,ema20,ema50,ema200,rsi,macd,msig,atr]: return None,0
+    if None in [price, ema20, ema50, ema200, rsi, macd, msig, atr]:
+        return None, 0
 
     direction = "LONG" if price > ema50 else "SHORT"
     s = 0
 
-    if direction=="LONG":
-        if price>ema200: s+=15
-        if price>ema50:  s+=12
-        if ema20>ema50:  s+=8
-        if price>ema20:  s+=5
+    if direction == "LONG":
+        if price > ema200: s += 15
+        if price > ema50:  s += 12
+        if ema20 > ema50:  s += 8
+        if price > ema20:  s += 5
     else:
-        if price<ema200: s+=15
-        if price<ema50:  s+=12
-        if ema20<ema50:  s+=8
-        if price<ema20:  s+=5
+        if price < ema200: s += 15
+        if price < ema50:  s += 12
+        if ema20 < ema50:  s += 8
+        if price < ema20:  s += 5
 
-    if direction=="LONG":
-        if 45<rsi<70:    s+=20
-        elif 35<rsi<=45: s+=10
+    if direction == "LONG":
+        if 45 < rsi < 70:    s += 20
+        elif 35 < rsi <= 45: s += 10
     else:
-        if 30<rsi<55:    s+=20
-        elif 55<=rsi<65: s+=10
+        if 30 < rsi < 55:    s += 20
+        elif 55 <= rsi < 65: s += 10
 
-    if direction=="LONG":
-        if macd>msig:  s+=12
-        if macdh and pmacdh and macdh>pmacdh: s+=8
+    if direction == "LONG":
+        if macd > msig:  s += 12
+        if macdh and pmacdh and macdh > pmacdh: s += 8
     else:
-        if macd<msig:  s+=12
-        if macdh and pmacdh and macdh<pmacdh: s+=8
+        if macd < msig:  s += 12
+        if macdh and pmacdh and macdh < pmacdh: s += 8
 
     if bbpct is not None:
-        if 0.3<bbpct<0.7: s+=10
+        if 0.3 < bbpct < 0.7:
+            s += 10
 
-    atr_pct = atr/price*100
-    if 0.5<atr_pct<3.0: s+=10
+    atr_pct = atr / price * 100
+    if 0.5 < atr_pct < 3.0:
+        s += 10
 
-    return direction, min(s,100)
+    return direction, min(s, 100)
 
 # ─────────────────────────────────────────────────────────
 #  TRADE LEVELS
 # ─────────────────────────────────────────────────────────
-def build_levels(price, atr, direction):
-    if direction=="LONG":
-        sl=price-1.5*atr; tp1=price+1.5*atr; tp2=price+3.0*atr; ko=price-2.0*atr
+def build_levels(price, atr, direction: str):
+    if direction == "LONG":
+        sl  = price - 1.5 * atr
+        tp1 = price + 1.5 * atr
+        tp2 = price + 3.0 * atr
+        ko  = price - 2.0 * atr
     else:
-        sl=price+1.5*atr; tp1=price-1.5*atr; tp2=price-3.0*atr; ko=price+2.0*atr
-    rr = abs(tp2-price)/abs(price-sl)
+        sl  = price + 1.5 * atr
+        tp1 = price - 1.5 * atr
+        tp2 = price - 3.0 * atr
+        ko  = price + 2.0 * atr
+    rr = abs(tp2 - price) / abs(price - sl)
     return dict(entry=price, sl=sl, tp1=tp1, tp2=tp2, ko=ko, rr=rr)
 
 # ─────────────────────────────────────────────────────────
@@ -370,7 +389,7 @@ def ko_proposals(price, atr, direction, eur_usd):
     ]
     proposals = []
     for name, mult, color, desc in configs:
-        if direction=="LONG":
+        if direction == "LONG":
             barrier = price - mult * atr
             strike  = barrier * 0.99
         else:
@@ -392,8 +411,8 @@ def ko_proposals(price, atr, direction, eur_usd):
     return proposals
 
 def search_links(ticker, direction):
-    typ = "call" if direction=="LONG" else "put"
-    TYP = "CALL" if direction=="LONG" else "PUT"
+    typ = "call" if direction == "LONG" else "put"
+    TYP = "CALL" if direction == "LONG" else "PUT"
     return {
         "Boerse Stuttgart": f"https://www.boerse-stuttgart.de/de-de/produkte/hebelprodukte/knockouts/?underlying={ticker}&producttype=knock-out-{typ}",
         "OnVista":          f"https://www.onvista.de/derivate/knock-out?type={TYP}&underlying={quote(ticker)}",
@@ -408,7 +427,8 @@ def position_size(capital_eur, risk_pct, price, sl, cert_price, ratio, eur_usd):
     risk_eur      = capital_eur * risk_pct / 100
     sl_dist_usd   = abs(price - sl)
     sl_dist_cert  = sl_dist_usd * ratio / eur_usd
-    if sl_dist_cert <= 0: return {}
+    if sl_dist_cert <= 0:
+        return {}
     anzahl        = int(risk_eur / sl_dist_cert)
     invest_eur    = anzahl * cert_price
     return {
@@ -426,43 +446,49 @@ def run_scan(min_score):
     results = []
     for ticker in ALL_TICKERS:
         df = load(ticker)
-        if df is None or len(df) < 220: continue
+        if df is None or len(df) < 220:
+            continue
         df = add_indicators(df)
         direction, ts = trend_score(df)
-        if direction is None or ts < min_score: continue
+        if direction is None or ts < min_score:
+            continue
         r = df.iloc[-1]
-        price=sf(r["Close"]); atr=sf(r["ATR"]); rsi=sf(r["RSI"])
-        if not price or not atr: continue
+        price = sf(r["Close"]); atr = sf(r["ATR"]); rsi = sf(r["RSI"])
+        if not price or not atr:
+            continue
         eq, _ = entry_quality(df, direction)
         levels = build_levels(price, atr, direction)
-        prev = df[df["Datetime"] < (df["Datetime"].iloc[-1]-pd.Timedelta("23h"))]
+        prev = df[df["Datetime"] < (df["Datetime"].iloc[-1] - pd.Timedelta("23h"))]
         chg = None
         if len(prev):
             p0 = sf(prev.iloc[-1]["Close"])
-            if p0: chg = (price-p0)/p0*100
+            if p0:
+                chg = (price - p0) / p0 * 100
         results.append({
             "Ticker":  ticker,
-            "Sektor":  TICKER_TO_SECTOR.get(ticker,"–"),
+            "Sektor":  TICKER_TO_SECTOR.get(ticker, "–"),
             "Dir":     direction,
             "Trend":   ts,
             "Entry-Q": eq,
-            "Price":   round(price,2),
-            "RSI":     round(rsi,1) if rsi else None,
-            "ATR%":    round(atr/price*100,2),
-            "RR":      round(levels["rr"],1),
-            "Chg%":    round(chg,2) if chg else None,
+            "Price":   round(price, 2),
+            "RSI":     round(rsi, 1) if rsi else None,
+            "ATR%":    round(atr / price * 100, 2),
+            "RR":      round(levels["rr"], 1),
+            "Chg%":    round(chg, 2) if chg else None,
         })
     df_out = pd.DataFrame(results)
     if not df_out.empty:
-        df_out = df_out.sort_values(["Trend","Entry-Q"],ascending=False).reset_index(drop=True)
+        df_out = df_out.sort_values(["Trend", "Entry-Q"], ascending=False).reset_index(drop=True)
     return df_out
 
 # ─────────────────────────────────────────────────────────
 #  CHART
 # ─────────────────────────────────────────────────────────
 def build_chart(df, levels, direction):
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                        row_heights=[0.60,0.20,0.20], vertical_spacing=0.03)
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True,
+        row_heights=[0.60, 0.20, 0.20], vertical_spacing=0.03
+    )
 
     fig.add_trace(go.Candlestick(
         x=df["Datetime"], open=df["Open"], high=df["High"],
@@ -472,14 +498,20 @@ def build_chart(df, levels, direction):
     ), row=1, col=1)
 
     for col, color, w in [("EMA20","#58a6ff",1.2),("EMA50","#d2a8ff",1.2),("EMA200","#ffa657",1.0)]:
-        fig.add_trace(go.Scatter(x=df["Datetime"],y=df[col],
-                                 line=dict(color=color,width=w),name=col,opacity=0.85), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=df["Datetime"], y=df[col],
+            line=dict(color=color, width=w), name=col, opacity=0.85
+        ), row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=df["Datetime"],y=df["BB_upper"],
-                             line=dict(color="#484f58",width=1,dash="dot"),showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df["Datetime"],y=df["BB_lower"],
-                             line=dict(color="#484f58",width=1,dash="dot"),
-                             fill="tonexty",fillcolor="rgba(72,79,88,0.07)",showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df["Datetime"], y=df["BB_upper"],
+        line=dict(color="#484f58", width=1, dash="dot"), showlegend=False
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df["Datetime"], y=df["BB_lower"],
+        line=dict(color="#484f58", width=1, dash="dot"),
+        fill="tonexty", fillcolor="rgba(72,79,88,0.07)", showlegend=False
+    ), row=1, col=1)
 
     level_cfg = [
         ("entry","ENTRY","#c9d1d9","solid"),
@@ -491,35 +523,45 @@ def build_chart(df, levels, direction):
     for key, label, color, dash in level_cfg:
         v = levels.get(key)
         if v:
-            fig.add_hline(y=v, line_color=color, line_width=1, line_dash=dash,
-                          annotation_text=f" {label} {v:.2f}",
-                          annotation_font_color=color, annotation_font_size=10,
-                          row=1, col=1)
+            fig.add_hline(
+                y=v, line_color=color, line_width=1, line_dash=dash,
+                annotation_text=f" {label} {v:.2f}",
+                annotation_font_color=color, annotation_font_size=10,
+                row=1, col=1
+            )
 
-    fig.add_trace(go.Scatter(x=df["Datetime"],y=df["RSI"],
-                             line=dict(color="#58a6ff",width=1.5),name="RSI"), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=df["Datetime"], y=df["RSI"],
+        line=dict(color="#58a6ff", width=1.5), name="RSI"
+    ), row=2, col=1)
     for lvl, col in [(70,"#f85149"),(50,"#484f58"),(30,"#3fb950")]:
-        fig.add_hline(y=lvl,line_color=col,line_dash="dot",line_width=1,row=2,col=1)
+        fig.add_hline(y=lvl, line_color=col, line_dash="dot", line_width=1, row=2, col=1)
 
-    hist_c = ["#3fb950" if v>=0 else "#f85149" for v in df["MACD_hist"]]
-    fig.add_trace(go.Bar(x=df["Datetime"],y=df["MACD_hist"],
-                         marker_color=hist_c,name="Hist",opacity=0.7), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df["Datetime"],y=df["MACD"],
-                             line=dict(color="#58a6ff",width=1.2),name="MACD"), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df["Datetime"],y=df["MACD_signal"],
-                             line=dict(color="#ffa657",width=1.2),name="Signal"), row=3, col=1)
+    hist_c = ["#3fb950" if v >= 0 else "#f85149" for v in df["MACD_hist"]]
+    fig.add_trace(go.Bar(
+        x=df["Datetime"], y=df["MACD_hist"],
+        marker_color=hist_c, name="Hist", opacity=0.7
+    ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=df["Datetime"], y=df["MACD"],
+        line=dict(color="#58a6ff", width=1.2), name="MACD"
+    ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=df["Datetime"], y=df["MACD_signal"],
+        line=dict(color="#ffa657", width=1.2), name="Signal"
+    ), row=3, col=1)
 
     bg = "#0d0f14"
     fig.update_layout(
         height=680, paper_bgcolor=bg, plot_bgcolor=bg,
-        font=dict(family="IBM Plex Mono",color="#c9d1d9",size=10),
-        legend=dict(bgcolor="rgba(0,0,0,0)",font_size=10,x=0.01,y=0.99),
-        margin=dict(l=5,r=5,t=10,b=5),
+        font=dict(family="IBM Plex Mono", color="#c9d1d9", size=10),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font_size=10, x=0.01, y=0.99),
+        margin=dict(l=5, r=5, t=10, b=5),
         xaxis_rangeslider_visible=False, hovermode="x unified",
     )
-    for i in range(1,4):
-        fig.update_xaxes(gridcolor="#21262d",showgrid=True,zeroline=False,row=i,col=1)
-        fig.update_yaxes(gridcolor="#21262d",showgrid=True,zeroline=False,row=i,col=1)
+    for i in range(1, 4):
+        fig.update_xaxes(gridcolor="#21262d", showgrid=True, zeroline=False, row=i, col=1)
+        fig.update_yaxes(gridcolor="#21262d", showgrid=True, zeroline=False, row=i, col=1)
     return fig
 
 # ─────────────────────────────────────────────────────────
@@ -529,16 +571,22 @@ with st.sidebar:
     st.markdown("### ⚙️ Scanner")
     min_score  = st.slider("Mindest-Trend-Score", 40, 90, 60, 5)
     dir_filter = st.radio("Richtung", ["Alle","LONG","SHORT"], horizontal=True)
+
     st.markdown("---")
     st.markdown("### 💰 Positionsrechner")
     capital  = st.number_input("Kapital (€)", value=10000, step=500)
     risk_pct = st.slider("Risiko pro Trade (%)", 0.5, 5.0, 1.0, 0.5)
     st.markdown(f"**Max. Risiko: {capital*risk_pct/100:.0f} €**")
+
     st.markdown("---")
     if st.button("🔄 Neu laden"):
-        st.cache_data.clear(); st.rerun()
-    st.markdown('<p style="font-size:0.72rem;color:#484f58;">Daten alle 5 min gecacht · EUR/USD auto</p>',
-                unsafe_allow_html=True)
+        st.cache_data.clear()
+        st.rerun()
+
+    st.markdown(
+        '<p style="font-size:0.72rem;color:#484f58;">Daten alle 5 min gecacht · EUR/USD auto</p>',
+        unsafe_allow_html=True
+    )
 
 # ─────────────────────────────────────────────────────────
 #  HEADER
@@ -558,16 +606,22 @@ st.markdown(f"""
 with st.spinner("Scanner läuft …"):
     results = run_scan(min_score)
 
-if dir_filter == "LONG":  results = results[results["Dir"]=="LONG"].reset_index(drop=True)
-if dir_filter == "SHORT": results = results[results["Dir"]=="SHORT"].reset_index(drop=True)
+if dir_filter == "LONG":
+    results = results[results["Dir"] == "LONG"].reset_index(drop=True)
+elif dir_filter == "SHORT":
+    results = results[results["Dir"] == "SHORT"].reset_index(drop=True)
 
 # ─────────────────────────────────────────────────────────
 #  SUMMARY
 # ─────────────────────────────────────────────────────────
-lc = len(results[results["Dir"]=="LONG"])  if not results.empty else 0
-sc = len(results[results["Dir"]=="SHORT"]) if not results.empty else 0
-aq = int(results["Entry-Q"].mean())         if not results.empty else 0
-tp = results.iloc[0]["Ticker"]              if not results.empty else "–"
+if results.empty:
+    lc = sc = aq = 0
+    tp = "–"
+else:
+    lc = len(results[results["Dir"] == "LONG"])
+    sc = len(results[results["Dir"] == "SHORT"])
+    aq = int(results["Entry-Q"].mean())
+    tp = results.iloc[0]["Ticker"]
 
 st.markdown(f"""
 <div class="metric-row">
@@ -584,184 +638,184 @@ if results.empty:
     st.stop()
 
 # ─────────────────────────────────────────────────────────
-#  TABLE
+#  TABLE (Styler mit .map statt .applymap)
 # ─────────────────────────────────────────────────────────
 disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%"]].copy()
 
 def sd(v):
-    if v=="LONG":  return "color:#3fb950;font-weight:600"
-    if v=="SHORT": return "color:#f85149;font-weight:600"
+    if v == "LONG":
+        return "color:#3fb950;font-weight:600"
+    if v == "SHORT":
+        return "color:#f85149;font-weight:600"
     return ""
-def ss(v): return "color:#3fb950;font-weight:600" if v>=80 else ("color:#58a6ff" if v>=65 else "")
-def se(v): return "color:#3fb950;font-weight:600" if v>=70 else ("color:#ffa657" if v>=50 else "color:#f85149")
+
+def ss(v):
+    if v >= 80:
+        return "color:#3fb950;font-weight:600"
+    if v >= 65:
+        return "color:#58a6ff"
+    return ""
+
+def se(v):
+    if v >= 70:
+        return "color:#3fb950;font-weight:600"
+    if v >= 50:
+        return "color:#ffa657"
+    return "color:#f85149"
+
 def sc2(v):
-    if v is None: return ""
-    return "color:#3fb950" if v>0 else "color:#f85149"
+    if v is None:
+        return ""
+    return "color:#3fb950" if v > 0 else "color:#f85149"
 
 styled = (
     disp.style
-    .apply(sd,  subset=["Dir"], axis=None)
-    .apply(ss,  subset=["Trend"], axis=None)
-    .apply(se,  subset=["Entry-Q"], axis=None)
-    .apply(sc2, subset=["Chg%"], axis=None)
-    .format({"Price":"{:.2f}","RSI":"{:.1f}","ATR%":"{:.2f}%","RR":"{:.1f}",
-             "Chg%": lambda x: f"{x:+.2f}%" if x is not None else "–"})
-    .set_properties(**{"background-color":"#161b22","color":"#c9d1d9"})
+    .map(sd,  subset=["Dir"])
+    .map(ss,  subset=["Trend"])
+    .map(se,  subset=["Entry-Q"])
+    .map(sc2, subset=["Chg%"])
+    .format({
+        "Price": "{:.2f}",
+        "RSI":   "{:.1f}",
+        "ATR%":  "{:.2f}%",
+        "RR":    "{:.1f}",
+        "Chg%":  lambda x: f"{x:+.2f}%" if x is not None else "–",
+    })
+    .set_properties(**{"background-color": "#161b22", "color": "#c9d1d9"})
 )
 
 event = st.dataframe(
-    styled, use_container_width=True,
-    selection_mode="single-row", on_select="rerun",
-    height=min(420, 42+len(disp)*38),
+    styled,
+    use_container_width=True,
+    selection_mode="single-row",
+    on_select="rerun",
+    height=min(420, 42 + len(disp) * 38),
 )
 
 # ─────────────────────────────────────────────────────────
 #  DETAIL VIEW
 # ─────────────────────────────────────────────────────────
-rows = event.selection.get("rows",[]) if event else []
+selection = event.selection
+if selection and "rows" in selection and len(selection["rows"]) > 0:
+    idx = selection["rows"][0]
+    row = results.iloc[idx]
+    ticker = row["Ticker"]
+else:
+    ticker = results.iloc[0]["Ticker"]
 
-if rows:
-    idx      = rows[0]
-    row_data = results.iloc[idx]
-    ticker   = row_data["Ticker"]
-    direc    = row_data["Dir"]
+df_detail = load(ticker)
+if df_detail is None or len(df_detail) < 220:
+    st.warning(f"Keine Detaildaten für {ticker}.")
+    st.stop()
 
-    st.markdown("---")
+df_detail = add_indicators(df_detail)
+direction, ts = trend_score(df_detail)
+eq_score, eq_sigs = entry_quality(df_detail, direction)
+last = df_detail.iloc[-1]
+price = sf(last["Close"])
+atr   = sf(last["ATR"])
+levels = build_levels(price, atr, direction)
+proposals = ko_proposals(price, atr, direction, eur_usd)
+links = search_links(ticker, direction)
 
-    with st.spinner(f"Lade {ticker} …"):
-        df_t = load(ticker)
+col_left, col_right = st.columns([2, 1])
 
-    if df_t is None or len(df_t) < 220:
-        st.warning("Nicht genug Daten."); st.stop()
+with col_left:
+    st.markdown(f"### {ticker} – Detailansicht")
+    fig = build_chart(df_detail, levels, direction)
+    st.plotly_chart(fig, use_container_width=True)
 
-    df_t      = add_indicators(df_t)
-    price     = sf(df_t.iloc[-1]["Close"])
-    atr       = sf(df_t.iloc[-1]["ATR"])
-    levels    = build_levels(price, atr, direc)
-    eq_score, eq_sigs = entry_quality(df_t, direc)
-    proposals = ko_proposals(price, atr, direc, eur_usd)
-    links     = search_links(ticker, direc)
+with col_right:
+    st.markdown("### Setup & Levels")
 
-    # ── Chart + Seitenleiste
-    col_chart, col_detail = st.columns([3,1])
-
-    with col_chart:
-        st.plotly_chart(build_chart(df_t, levels, direc), use_container_width=True)
-
-    with col_detail:
-        badge = f'<span class="badge {"long-b" if direc=="LONG" else "short-b"}">{direc}</span>'
-        st.markdown(f"""
-        <div style="font-size:1.4rem;font-weight:700;color:#c9d1d9;margin-bottom:4px;">
-          {ticker} {badge}
-        </div>
-        <div style="font-size:0.75rem;color:#484f58;margin-bottom:14px;">
-          {row_data['Sektor']} &nbsp;|&nbsp; Trend {row_data['Trend']} &nbsp;|&nbsp; RR 1:{row_data['RR']}
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Entry-Qualität
-        eq_color = "#3fb950" if eq_score>=70 else ("#ffa657" if eq_score>=45 else "#f85149")
-        eq_text  = "Jetzt einsteigen" if eq_score>=70 else ("Auf besseren Entry warten" if eq_score>=45 else "Entry nicht empfohlen")
-        pills_html = "".join([
-            f'<span class="pill {"pill-green" if t=="good" else ("pill-red" if t=="bad" else "pill-orange")}">{l}</span>'
-            for l,t in eq_sigs
-        ])
-        st.markdown(f"""
-        <div class="entry-quality">
-          <div style="min-width:54px;">
-            <div class="eq-label">Entry-Q</div>
-            <div class="eq-score" style="color:{eq_color};">{eq_score}</div>
-          </div>
-          <div>
-            <div style="color:{eq_color};font-weight:600;font-size:0.82rem;margin-bottom:6px;">{eq_text}</div>
-            {pills_html}
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Trade Levels
-        st.markdown(f"""
-        <div class="card">
-          <div class="card-title">Trade-Level (ATR-basiert)</div>
-          <div class="level-row"><span class="llabel">ENTRY</span><span>{price:.2f}</span></div>
-          <div class="level-row"><span class="llabel">STOP-LOSS</span><span style="color:#f85149">{levels['sl']:.2f}</span></div>
-          <div class="level-row"><span class="llabel">TP 1 (1.5×)</span><span style="color:#3fb950">{levels['tp1']:.2f}</span></div>
-          <div class="level-row"><span class="llabel">TP 2 (3×)</span><span style="color:#3fb950">{levels['tp2']:.2f}</span></div>
-          <div class="level-row"><span class="llabel">KO-Referenz</span><span style="color:#ffa657">{levels['ko']:.2f}</span></div>
-          <div class="level-row"><span class="llabel">ATR (14h)</span><span>{atr:.2f}</span></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # ── KO-ZERTIFIKATE – volle Breite
-    st.markdown("### 🎯 KO-Zertifikat Vorschläge")
-    st.markdown(
-        f'<p style="font-size:0.74rem;color:#484f58;margin-bottom:14px;">'
-        f'Basiswert: {ticker} @ {price:.2f} USD &nbsp;·&nbsp; '
-        f'Bezugsverhältnis: 0.10 &nbsp;·&nbsp; EUR/USD: {eur_usd:.4f} &nbsp;·&nbsp; '
-        f'<em>Berechnete Orientierungswerte – keine echten Produktdaten</em></p>',
-        unsafe_allow_html=True
-    )
-
-    ko_cols = st.columns(3)
-    for i, prop in enumerate(proposals):
-        pos = position_size(capital, risk_pct, price, levels["sl"],
-                            prop["cert_price"], prop["ratio"], eur_usd)
-        with ko_cols[i]:
-            st.markdown(f"""
-            <div class="ko-card" style="border-color:{prop['color']}55;">
-              <div class="ko-tag" style="color:{prop['color']}">{prop['name']}</div>
-              <div style="font-size:0.71rem;color:#8b949e;margin-bottom:10px;">{prop['desc']}</div>
-              <div class="ko-grid">
-                <span class="ko-key">Barrier (USD)</span>
-                <span class="ko-val" style="color:{prop['color']}">{prop['barrier']:.2f}</span>
-                <span class="ko-key">Strike (USD)</span>
-                <span class="ko-val">{prop['strike']:.2f}</span>
-                <span class="ko-key">Abstand</span>
-                <span class="ko-val">{prop['abstand']:.1f}%</span>
-                <span class="ko-key">Hebel (ca.)</span>
-                <span class="ko-val" style="color:{prop['color']};font-weight:600">{prop['hebel']:.1f}×</span>
-                <span class="ko-key">Zert.-Kurs</span>
-                <span class="ko-val">≈ {prop['cert_price']:.2f} €</span>
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            if pos:
-                invest_pct = pos['invest_eur'] / capital * 100
-                warn_color = "#ffa657" if invest_pct > 20 else "#3fb950"
-                st.markdown(f"""
-                <div class="card" style="margin-top:-4px;">
-                  <div class="card-title">Positionsgröße · {risk_pct}% Risiko</div>
-                  <div class="level-row"><span class="llabel">Max. Risiko</span>
-                    <span style="color:#f85149">{pos['risk_eur']:.0f} €</span></div>
-                  <div class="level-row"><span class="llabel">Anzahl Zert.</span>
-                    <span>{pos['anzahl']}</span></div>
-                  <div class="level-row"><span class="llabel">Investition</span>
-                    <span style="color:#58a6ff">{pos['invest_eur']:.0f} €</span></div>
-                  <div class="level-row"><span class="llabel">Kapitalanteil</span>
-                    <span style="color:{warn_color}">{invest_pct:.1f}%</span></div>
-                  <div class="level-row"><span class="llabel">Max. Verlust (KO)</span>
-                    <span style="color:#f85149">{pos['max_loss']:.0f} €</span></div>
-                </div>
-                """, unsafe_allow_html=True)
-
-    # ── Produktsuche-Links
-    st.markdown("**Echte Produkte finden:**")
-    links_html = "".join([
-        f'<a class="link-btn" href="{url}" target="_blank">🔗 {name}</a>'
-        for name, url in links.items()
-    ])
-    st.markdown(links_html, unsafe_allow_html=True)
-
-    st.markdown("""
-    <p style="font-size:0.69rem;color:#484f58;margin-top:12px;">
-    ⚠️ Die Zertifikat-Parameter sind ATR-basierte Orientierungswerte und entsprechen keinen echten Produkten.
-    Beim Kauf echte Barrier, Spread und Emittentenbonität beim Broker prüfen. Keine Anlageberatung.
-    </p>
+    badge_cls = "long-b" if direction == "LONG" else "short-b"
+    st.markdown(f"""
+    <div class="card">
+      <div class="card-title">Trend</div>
+      <span class="badge {badge_cls}">{direction}</span>
+      <div style="margin-top:8px;font-size:0.8rem;">
+        Trend-Score: <b>{ts}</b><br/>
+        Entry-Quality: <b>{eq_score}</b>
+      </div>
+    </div>
     """, unsafe_allow_html=True)
 
-else:
+    st.markdown('<div class="card"><div class="card-title">Trade Levels</div>', unsafe_allow_html=True)
+    for label, key in [("Entry", "entry"), ("Stop-Loss", "sl"), ("TP1", "tp1"), ("TP2", "tp2"), ("KO-Referenz", "ko")]:
+        v = levels.get(key)
+        st.markdown(
+            f"""
+            <div class="level-row">
+              <span class="llabel">{label}</span>
+              <span>{v:.2f}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="entry-quality">', unsafe_allow_html=True)
     st.markdown(
-        '<p style="font-size:0.75rem;color:#484f58;margin-top:8px;">↑ Zeile anklicken für Chart, Entry-Analyse & KO-Zertifikat-Vorschläge</p>',
-        unsafe_allow_html=True
+        f"""
+        <div class="eq-score">{eq_score}</div>
+        <div>
+          <div class="eq-label">Entry-Qualität</div>
+          <div style="margin-top:4px;font-size:0.78rem;">
+        """,
+        unsafe_allow_html=True,
     )
+    for txt, t in eq_sigs:
+        cls = "pill-green" if t == "good" else ("pill-orange" if t == "neutral" else "pill-red")
+        st.markdown(f'<span class="pill {cls}">{txt}</span>', unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
+
+    st.markdown("### KO-Zertifikate")
+    for p in proposals:
+        st.markdown(
+            f"""
+            <div class="ko-card">
+              <div class="ko-tag" style="color:{p['color']};">{p['name']}</div>
+              <div style="font-size:0.75rem;margin-bottom:6px;">{p['desc']}</div>
+              <div class="ko-grid">
+                <span class="ko-key">Barrier</span><span class="ko-val">{p['barrier']}</span>
+                <span class="ko-key">Strike</span><span class="ko-val">{p['strike']}</span>
+                <span class="ko-key">Abstand</span><span class="ko-val">{p['abstand']}%</span>
+                <span class="ko-key">Hebel</span><span class="ko-val">{p['hebel']}x</span>
+                <span class="ko-key">Preis (ca.)</span><span class="ko-val">{p['cert_price']} €</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("### Positionsgröße (Beispiel)")
+    if proposals:
+        p0 = proposals[1] if len(proposals) > 1 else proposals[0]
+        ps = position_size(
+            capital_eur=capital,
+            risk_pct=risk_pct,
+            price=price,
+            sl=levels["sl"],
+            cert_price=p0["cert_price"],
+            ratio=p0["ratio"],
+            eur_usd=eur_usd,
+        )
+        if ps:
+            st.markdown(
+                f"""
+                <div class="card">
+                  <div class="card-title">Positionsrechner</div>
+                  <div style="font-size:0.8rem;">
+                    Risiko: <b>{ps['risk_eur']} €</b><br/>
+                    Stückzahl: <b>{ps['anzahl']}</b><br/>
+                    Investition: <b>{ps['invest_eur']} €</b><br/>
+                    Max. Verlust (KO): <b>{ps['max_loss']} €</b>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("### Links zu KO-Suche")
+    for name, url in links.items():
+        st.markdown(f'<a class="link-btn" href="{url}" target="_blank">{name}</a>', unsafe_allow_html=True)
