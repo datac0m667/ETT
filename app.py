@@ -1,6 +1,6 @@
 """
-Trading Scanner v6 – Pools (S&P / Nasdaq / EuroStoxx) + optional market check,
-configurable RSI/ATR prefilters, hourly->daily fallback, improved diagnostics.
+Trading Scanner v7 – Pools (S&P / Nasdaq / EuroStoxx) + optional market check,
+configurable RSI/ATR prefilters, hourly->daily fallback, improved diagnostics removed.
 Start: streamlit run scanner.py
 """
 
@@ -12,7 +12,6 @@ from datetime import datetime
 from urllib.parse import quote
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from collections import Counter
 
 # ---------------- Page config & theme ----------------
 st.set_page_config(page_title="Trading Scanner", page_icon="📡", layout="wide")
@@ -295,7 +294,7 @@ def build_levels(price, atr, direction: str):
     rr = abs(tp2 - price) / abs(price - sl) if abs(price - sl) > 1e-9 else None
     return dict(entry=price, sl=sl, tp1=tp1, tp2=tp2, ko=ko, rr=rr)
 
-# ---------------- Prefilter with diagnostics ----------------
+# ---------------- Prefilter with diagnostics (keeps removed list) ----------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
     """
@@ -375,30 +374,25 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
 
     return ok, reasons
 
-# ---------------- Scan (collect fail reasons counts) ----------------
+# ---------------- Scan ----------------
 @st.cache_data(ttl=300, show_spinner=False)
 def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min, atr_max):
     results = []
-    fail_reasons_counter = Counter()
     market = market_metrics()
     for ticker in pool_tickers:
         df = load(ticker)
         if df is None or len(df) < 220:
-            fail_reasons_counter["insufficient_data"] += 1
             continue
         try:
             df = add_indicators(df)
         except Exception:
-            fail_reasons_counter["indicator_error"] += 1
             continue
         direction, ts = trend_score(df)
         if direction is None or ts < min_score:
-            fail_reasons_counter["trend_score_too_low"] += 1
             continue
         r = df.iloc[-1]
         price = sf(r["Close"]); atr = sf(r["ATR"]); rsi = sf(r["RSI"])
         if not price or not atr:
-            fail_reasons_counter["missing_price_or_atr"] += 1
             continue
         eq, _ = entry_quality(df, direction)
         levels = build_levels(price, atr, direction)
@@ -412,9 +406,6 @@ def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min,
                                            require_market=require_market,
                                            rsi_min=rsi_min, rsi_max=rsi_max,
                                            atr_min=atr_min, atr_max=atr_max)
-        if not rules_ok:
-            for rr in reasons:
-                fail_reasons_counter[rr] += 1
         results.append({
             "Ticker": ticker,
             "Sektor": "–",
@@ -432,7 +423,7 @@ def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min,
     df_out = pd.DataFrame(results)
     if not df_out.empty:
         df_out = df_out.sort_values(["Rules_OK", "Trend", "Entry-Q"], ascending=[False, False, False]).reset_index(drop=True)
-    return df_out, fail_reasons_counter
+    return df_out
 
 # ---------------- Sidebar controls ----------------
 with st.sidebar:
@@ -471,9 +462,11 @@ with st.spinner("Prefilter läuft (MarketCap / AvgVolume)…"):
     if removed_count:
         # show short summary of removal reasons (top 5)
         reasons = [r for (_, r) in removed_list]
-        rc = Counter(reasons)
+        rc = {}
+        for r in reasons:
+            rc[r] = rc.get(r, 0) + 1
         st.write("Entfernungsgründe (Top):")
-        for k, v in rc.most_common(5):
+        for k, v in sorted(rc.items(), key=lambda x: -x[1])[:5]:
             st.write(f"- {k}: {v}")
     if not pool_prefiltered:
         st.warning("Prefilter hat keine Ticker zurückgegeben. Pool wird ungefiltert verwendet.")
@@ -481,21 +474,11 @@ with st.spinner("Prefilter läuft (MarketCap / AvgVolume)…"):
 
 # ---------------- Run scan ----------------
 with st.spinner("Scanner läuft …"):
-    results, fail_reasons_counter = run_scan(min_score, pool_prefiltered, require_market, rsi_min, rsi_max, atr_min, atr_max)
+    results = run_scan(min_score, pool_prefiltered, require_market, rsi_min, rsi_max, atr_min, atr_max)
 
-# ---------------- Post-scan diagnostics ----------------
-st.markdown("---")
-st.markdown("## Scan Ergebnisse & Diagnose")
+# ---------------- If no results, show concise guidance and stop ----------------
 if results.empty:
-    st.warning("Keine Signale gefunden. Mögliche Ursachen:")
-    st.write("- Regeln zu strikt (RSI/ATR/Trend).")
-    st.write("- Prefilter hat viele Kandidaten entfernt.")
-    st.write("- Datenqualität / Ticker-Suffix (insbesondere EuroStoxx).")
-    # show top fail reasons from prefilter and scan
-    st.write("Prefilter entfernte Ticker:", removed_count)
-    st.write("Häufigste Scan-Fail-Gründe (Top 10):")
-    for k, v in fail_reasons_counter.most_common(10):
-        st.write(f"- {k}: {v}")
+    st.warning("Keine Signale gefunden. Mögliche Ursachen: Regeln zu strikt, Prefilter entfernt viele Kandidaten oder Datenqualität.")
     st.stop()
 
 # ---------------- Summary metrics ----------------
@@ -520,11 +503,6 @@ st.markdown(f"""
   <div class="metric"><div class="mlabel">Top Signal</div><div class="mvalue">{tp}</div></div>
 </div>
 """, unsafe_allow_html=True)
-
-# ---------------- Show top fail reasons summary ----------------
-st.markdown("### Häufigste Scan-Fail-Gründe (Top 10)")
-for k, v in fail_reasons_counter.most_common(10):
-    st.write(f"- **{k}**: {v}")
 
 # ---------------- Table (HTML colored) ----------------
 disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK","Fail_Reasons"]].copy()
