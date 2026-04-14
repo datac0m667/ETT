@@ -102,7 +102,6 @@ def add_indicators(df):
 
 # ---------- RULE CHECKS ----------
 def market_metrics():
-    # SPY, QQQ, VIX quick checks
     try:
         spy = yf.download("SPY", period="10d", interval="1d", progress=False)
         qqq = yf.download("QQQ", period="10d", interval="1d", progress=False)
@@ -119,7 +118,6 @@ def market_metrics():
 def evaluate_rules(df, direction, price, atr, proposals, eur_usd, market):
     reasons = []
     ok = True
-    # Trend structure
     ema20, ema50, ema200 = sf(df["EMA20"].iloc[-1]), sf(df["EMA50"].iloc[-1]), sf(df["EMA200"].iloc[-1])
     if direction=="LONG":
         if not (ema20>ema50>ema200):
@@ -127,32 +125,26 @@ def evaluate_rules(df, direction, price, atr, proposals, eur_usd, market):
     else:
         if not (ema20<ema50<ema200):
             ok=False; reasons.append("Trend nicht sauber (EMA20<EMA50<EMA200 fehlt)")
-    # Volatility moderate
     atr_pct = (atr/price*100) if price and atr else None
     if atr_pct is None or not (0.5 < atr_pct < 3.0):
         ok=False; reasons.append(f"ATR% außerhalb Bereich (aktuell {atr_pct:.2f}%)")
-    # Market VIX
     if market.get("VIX") and market["VIX"] > 20:
         ok=False; reasons.append(f"VIX hoch ({market['VIX']:.1f})")
-    # Momentum
     rsi = sf(df["RSI"].iloc[-1]); macd = sf(df["MACD"].iloc[-1]); msig = sf(df["MACD_signal"].iloc[-1])
     if not (45 <= rsi <= 60 and macd is not None and macd > msig):
         ok=False; reasons.append(f"Momentum nicht ideal (RSI {rsi}, MACD>Signal?)")
-    # KO distance: ensure at least 1.2*ATR for conservative
-    # proposals list contains barrier/strike/hebel
     if proposals:
         p = proposals[1] if len(proposals)>1 else proposals[0]
         barrier = p["barrier"]; dist = abs(price - barrier)
         if dist < 1.2*atr:
             ok=False; reasons.append(f"KO zu nah (Abstand {dist:.2f} < 1.2*ATR)")
-        # Hebel check approx
         if not (4.5 <= p["hebel"] <= 9):
             reasons.append(f"Hebel ausserhalb 4.5-9 (hebel {p['hebel']})")
     else:
         ok=False; reasons.append("Keine KO‑Vorschläge verfügbar")
     return ok, reasons
 
-# ---------- KO proposals & position sizing (unchanged logic) ----------
+# ---------- KO proposals & position sizing ----------
 def ko_proposals(price, atr, direction, eur_usd):
     ratio = 0.10
     configs = [("Konservativ",2.5,"#3fb950","weit"),("Moderat",1.5,"#58a6ff","ausgewogen"),("Aggressiv",0.7,"#ffa657","eng")]
@@ -177,7 +169,7 @@ def position_size(capital_eur, risk_pct, price, sl, cert_price, ratio, eur_usd):
     invest_eur = anzahl * cert_price
     return {"risk_eur":round(risk_eur,2),"anzahl":anzahl,"invest_eur":round(invest_eur,2),"max_loss":round(anzahl*cert_price,2)}
 
-# ---------- TREND SCORE & ENTRY QUALITY (kept) ----------
+# ---------- TREND SCORE & ENTRY QUALITY ----------
 def trend_score(df):
     r = df.iloc[-1]; prev = df.iloc[-2]
     price = sf(r["Close"]); ema20=sf(r["EMA20"]); ema50=sf(r["EMA50"]); ema200=sf(r["EMA200"])
@@ -303,30 +295,51 @@ st.markdown(f"<div class='card'><b>Signale:</b> {len(results)} — <b>Regeln erf
 # ---------- TABLE ----------
 disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK","Fail_Reasons"]].copy()
 
-def sd(v):
-    if v=="LONG": return "color:#0b5fff;font-weight:600"
-    if v=="SHORT": return "color:#ef4444;font-weight:600"
-    return ""
-def ss(v):
-    if v>=80: return "color:#059669;font-weight:600"
-    if v>=65: return "color:#0b5fff"
-    return ""
-def se(v):
-    if v>=70: return "color:#059669;font-weight:600"
-    if v>=50: return "color:#f59e0b"
-    return "color:#ef4444"
-def sc2(v):
-    if v is None: return ""
-    return "color:#059669" if v>0 else "color:#ef4444"
-def ok_style(v):
-    return "background-color:#ecfdf5;color:#065f46" if v else "background-color:#fff1f2;color:#7f1d1d"
+# NOTE: Styler.apply with axis=None passes a DataFrame subset to the function.
+# The function must return a DataFrame of same shape with style strings.
+def sd_df(subdf: pd.DataFrame) -> pd.DataFrame:
+    return subdf.applymap(lambda v: "color:#0b5fff;font-weight:600" if v=="LONG" else ("color:#ef4444;font-weight:600" if v=="SHORT" else ""))
+
+def ss_df(subdf: pd.DataFrame) -> pd.DataFrame:
+    def f(v):
+        try:
+            v = float(v)
+            if v>=80: return "color:#059669;font-weight:600"
+            if v>=65: return "color:#0b5fff"
+        except Exception:
+            pass
+        return ""
+    return subdf.applymap(f)
+
+def se_df(subdf: pd.DataFrame) -> pd.DataFrame:
+    def f(v):
+        try:
+            v = float(v)
+            if v>=70: return "color:#059669;font-weight:600"
+            if v>=50: return "color:#f59e0b"
+        except Exception:
+            pass
+        return "color:#ef4444"
+    return subdf.applymap(f)
+
+def sc2_df(subdf: pd.DataFrame) -> pd.DataFrame:
+    def f(v):
+        if v is None or (isinstance(v, float) and np.isnan(v)): return ""
+        try:
+            return "color:#059669" if float(v)>0 else "color:#ef4444"
+        except Exception:
+            return ""
+    return subdf.applymap(f)
+
+def ok_style_df(subdf: pd.DataFrame) -> pd.DataFrame:
+    return subdf.applymap(lambda v: "background-color:#ecfdf5;color:#065f46" if v else "background-color:#fff1f2;color:#7f1d1d")
 
 styled = (disp.style
-          .apply(sd, subset=["Dir"], axis=None)
-          .apply(ss, subset=["Trend"], axis=None)
-          .apply(se, subset=["Entry-Q"], axis=None)
-          .apply(sc2, subset=["Chg%"], axis=None)
-          .apply(ok_style, subset=["Rules_OK"], axis=None)
+          .apply(sd_df, subset=["Dir"], axis=None)
+          .apply(ss_df, subset=["Trend"], axis=None)
+          .apply(se_df, subset=["Entry-Q"], axis=None)
+          .apply(sc2_df, subset=["Chg%"], axis=None)
+          .apply(ok_style_df, subset=["Rules_OK"], axis=None)
           .format({"Price":"{:.2f}","RSI":"{:.1f}","ATR%":"{:.2f}%","RR":"{:.1f}","Chg%":lambda x: f"{x:+.2f}%" if x is not None else "–"})
           .set_properties(**{"background-color":"#ffffff","color":"#0f1720"}))
 
@@ -345,7 +358,6 @@ else:
     levels = {"entry":price,"sl": price-1.5*atr if direction=="LONG" else price+1.5*atr,"tp1":price+1.5*atr if direction=="LONG" else price-1.5*atr,"tp2":price+3*atr if direction=="LONG" else price-3*atr,"ko": price-2*atr if direction=="LONG" else price+2*atr}
     proposals = ko_proposals(price, atr, direction, eur_usd)
     st.markdown(f"### {selected} — {direction} — TrendScore {ts} — EntryQ {eq_score}")
-    # simple chart
     fig = make_subplots(rows=1, cols=1, shared_xaxes=True)
     fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["Close"], name="Close"))
     st.plotly_chart(fig, use_container_width=True)
