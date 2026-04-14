@@ -19,12 +19,14 @@ st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
   html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; background-color: #f2f4f6; color: #0f1720; }
-  .topbar-title { font-family:'IBM Plex Mono',monospace; color:#0b5fff; }
-  .card { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:12px; }
+  .topbar-title { font-family:'IBM Plex Mono',monospace; color:#0b5fff; font-size:1.3rem; margin-bottom:0.5rem; }
+  .card { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:12px; margin-bottom:10px; }
   .metric { background:#ffffff; border:1px solid #e5e7eb; border-radius:8px; padding:10px 14px; }
-  .badge { font-family:'IBM Plex Mono',monospace; }
-  a.link-btn { background:#eef2ff; color:#0b5fff; padding:6px 10px; border-radius:6px; text-decoration:none; }
   .block-container { padding-top:1.2rem; }
+  table { border-collapse:collapse; width:100%; font-size:0.9rem; }
+  th, td { border:1px solid #e5e7eb; padding:6px 8px; text-align:right; }
+  th { background:#f9fafb; text-align:center; }
+  td:first-child, th:first-child { text-align:left; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -142,6 +144,7 @@ def market_metrics():
 def evaluate_rules(df, direction, price, atr, proposals, eur_usd, market):
     reasons = []
     ok = True
+
     ema20 = sf(df["EMA20"].iloc[-1]); ema50 = sf(df["EMA50"].iloc[-1]); ema200 = sf(df["EMA200"].iloc[-1])
     if direction == "LONG":
         if not (ema20 and ema50 and ema200 and ema20 > ema50 > ema200):
@@ -251,10 +254,8 @@ def trend_score(df):
 
     if direction == "LONG":
         if macd > msig: s += 12
-        if sf(df["MACD_hist"].iloc[-1]) and sf(prev["MACD_hist"]) and sf(df["MACD_hist"].iloc[-1]) > sf(prev["MACD_hist"]): s += 8
     else:
         if macd < msig: s += 12
-        if sf(df["MACD_hist"].iloc[-1]) and sf(prev["MACD_hist"]) and sf(df["MACD_hist"].iloc[-1]) < sf(prev["MACD_hist"]): s += 8
 
     if bbpct is not None and 0.3 < bbpct < 0.7: s += 10
 
@@ -355,7 +356,6 @@ def run_scan(min_score, eur_usd):
         if not price or not atr:
             continue
         eq, _ = entry_quality(df, direction)
-        levels = {"entry": price, "sl": price - 1.5*atr if direction == "LONG" else price + 1.5*atr, "rr": 3.0}
         proposals = ko_proposals(price, atr, direction, eur_usd)
         ok, reasons = evaluate_rules(df, direction, price, atr, proposals, eur_usd, market)
         prev = df[df["Datetime"] < (df["Datetime"].iloc[-1] - pd.Timedelta("23h"))]
@@ -373,7 +373,7 @@ def run_scan(min_score, eur_usd):
             "Price": round(price, 2),
             "RSI": round(rsi, 1) if rsi else None,
             "ATR%": round(atr/price*100, 2),
-            "RR": round(levels["rr"], 1),
+            "RR": 3.0,
             "Chg%": round(chg, 2) if chg else None,
             "Rules_OK": ok,
             "Fail_Reasons": "; ".join(reasons) if reasons else ""
@@ -398,7 +398,10 @@ with st.sidebar:
 
 # ---------- RUN SCAN ----------
 eur_usd = get_eur_usd()
-st.markdown(f"<div class='topbar-title'>📡 TRADING SCANNER — {datetime.now().strftime('%H:%M:%S')} | EUR/USD {eur_usd:.4f}</div>", unsafe_allow_html=True)
+st.markdown(
+    f"<div class='topbar-title'>📡 TRADING SCANNER — {datetime.now().strftime('%H:%M:%S')} | EUR/USD {eur_usd:.4f}</div>",
+    unsafe_allow_html=True
+)
 with st.spinner("Scanner läuft …"):
     results = run_scan(min_score, eur_usd)
 
@@ -412,88 +415,73 @@ if results.empty:
     st.info("Keine Signale gefunden.")
     st.stop()
 
-st.markdown(f"<div class='card'><b>Signale:</b> {len(results)} — <b>Regeln erfüllt:</b> {results['Rules_OK'].sum()}</div>", unsafe_allow_html=True)
+st.markdown(
+    f"<div class='card'><b>Signale:</b> {len(results)} — <b>Regeln erfüllt:</b> {results['Rules_OK'].sum()}</div>",
+    unsafe_allow_html=True
+)
 
-# ---------- TABLE ----------
-disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK","Fail_Reasons"]].copy()
+# ---------- TABLE (ohne Styler, mit HTML-Farben) ----------
+def color_dir(v):
+    if v == "LONG":
+        return '<span style="color:#0b5fff;font-weight:600">LONG</span>'
+    if v == "SHORT":
+        return '<span style="color:#ef4444;font-weight:600">SHORT</span>'
+    return str(v)
 
-# Robust styler helpers: accept Series or DataFrame and return same-shaped object with style strings
-def _to_df_like_with_styles(obj, func):
-    """
-    obj: Series or DataFrame (the subset passed by Styler.apply with axis=None)
-    func: element-wise function returning a style string for a single value
-    Returns: same-shaped object (Series or DataFrame) with style strings
-    """
-    # If it's a Series, map element-wise and return Series
-    if isinstance(obj, pd.Series):
-        return obj.map(lambda v: func(v))
-    # If it's a DataFrame, apply element-wise and return DataFrame with same index/columns
-    if isinstance(obj, pd.DataFrame):
-        return obj.applymap(lambda v: func(v))
-    # Fallback: try to coerce to DataFrame preserving shape
+def color_trend(v):
     try:
-        df = pd.DataFrame(obj)
-        styled = df.applymap(lambda v: func(v))
-        # preserve original index/columns if possible
-        styled.index = getattr(obj, "index", styled.index)
-        styled.columns = getattr(obj, "columns", styled.columns)
-        return styled
+        v = float(v)
     except Exception:
-        # As last resort, return obj unchanged (Styler will error less aggressively)
-        return obj
+        return str(v)
+    if v >= 80:
+        return f'<span style="color:#059669;font-weight:600">{v:.0f}</span>'
+    if v >= 65:
+        return f'<span style="color:#0b5fff">{v:.0f}</span>'
+    return f"{v:.0f}"
 
-# element-wise style functions
-def sd_style(v):
-    if v == "LONG": return "color:#0b5fff;font-weight:600"
-    if v == "SHORT": return "color:#ef4444;font-weight:600"
-    return ""
-
-def ss_style(v):
+def color_entry(v):
     try:
-        vv = float(v)
-        if vv >= 80: return "color:#059669;font-weight:600"
-        if vv >= 65: return "color:#0b5fff"
+        v = float(v)
     except Exception:
-        pass
-    return ""
+        return str(v)
+    if v >= 70:
+        return f'<span style="color:#059669;font-weight:600">{v:.0f}</span>'
+    if v >= 50:
+        return f'<span style="color:#f59e0b">{v:.0f}</span>'
+    return f'<span style="color:#ef4444">{v:.0f}</span>'
 
-def se_style(v):
+def color_chg(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "–"
     try:
-        vv = float(v)
-        if vv >= 70: return "color:#059669;font-weight:600"
-        if vv >= 50: return "color:#f59e0b"
+        v = float(v)
     except Exception:
-        pass
-    return "color:#ef4444"
+        return str(v)
+    if v > 0:
+        return f'<span style="color:#059669">+{v:.2f}%</span>'
+    return f'<span style="color:#ef4444">{v:.2f}%</span>'
 
-def sc2_style(v):
-    if v is None or (isinstance(v, float) and np.isnan(v)): return ""
-    try:
-        return "color:#059669" if float(v) > 0 else "color:#ef4444"
-    except Exception:
-        return ""
+def color_rules(v):
+    if v:
+        return '<span style="background:#ecfdf5;color:#065f46;padding:3px 6px;border-radius:4px;">OK</span>'
+    return '<span style="background:#fff1f2;color:#7f1d1d;padding:3px 6px;border-radius:4px;">FAIL</span>'
 
-def ok_style(v):
-    return "background-color:#ecfdf5;color:#065f46" if v else "background-color:#fff1f2;color:#7f1d1d"
-
-# Build Styler and apply styles using wrappers that accept Series/DataFrame
-styled = disp.style
-styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, sd_style), subset=["Dir"], axis=None)
-styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, ss_style), subset=["Trend"], axis=None)
-styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, se_style), subset=["Entry-Q"], axis=None)
-styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, sc2_style), subset=["Chg%"], axis=None)
-styled = styled.apply(lambda sub: _to_df_like_with_styles(sub, ok_style), subset=["Rules_OK"], axis=None)
-
-styled = styled.format({
-    "Price": "{:.2f}",
-    "RSI": "{:.1f}",
-    "ATR%": "{:.2f}%",
-    "RR": "{:.1f}",
-    "Chg%": lambda x: f"{x:+.2f}%" if x is not None else "–",
+table = pd.DataFrame({
+    "Ticker": results["Ticker"],
+    "Sektor": results["Sektor"],
+    "Dir": results["Dir"].apply(color_dir),
+    "Trend": results["Trend"].apply(color_trend),
+    "Entry-Q": results["Entry-Q"].apply(color_entry),
+    "Price": results["Price"].apply(lambda x: f"{x:.2f}"),
+    "RSI": results["RSI"].apply(lambda x: f"{x:.1f}" if x is not None else "–"),
+    "ATR%": results["ATR%"].apply(lambda x: f"{x:.2f}%"),
+    "RR": results["RR"].apply(lambda x: f"{x:.1f}"),
+    "Chg%": results["Chg%"].apply(color_chg),
+    "Rules": results["Rules_OK"].apply(color_rules),
+    "Fail_Reasons": results["Fail_Reasons"],
 })
-styled = styled.set_properties(**{"background-color":"#ffffff","color":"#0f1720"})
 
-st.dataframe(styled, use_container_width=True, height=min(520, 42 + len(disp) * 38))
+st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 # ---------- DETAIL via selectbox ----------
 selected = st.selectbox("Detailansicht wählen", options=list(results["Ticker"]), index=0)
@@ -519,7 +507,9 @@ else:
     st.plotly_chart(fig, use_container_width=True)
     st.markdown("**KO Vorschläge**")
     for p in proposals:
-        st.markdown(f"- {p['name']}: Barrier {p['barrier']} | Strike {p['strike']} | Hebel {p['hebel']} | Preis {p['cert_price']} €")
+        st.markdown(
+            f"- {p['name']}: Barrier {p['barrier']} | Strike {p['strike']} | Hebel {p['hebel']} | Preis {p['cert_price']} €"
+        )
     st.markdown("**Fail Reasons (Scan)**")
     row = results[results["Ticker"] == selected].iloc[0]
     st.write(row["Fail_Reasons"] or "Alle Regeln erfüllt.")
