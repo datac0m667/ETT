@@ -1,6 +1,6 @@
 """
-Trading Scanner v7 – Pools (S&P / Nasdaq / EuroStoxx) + optional market check,
-configurable RSI/ATR prefilters, hourly->daily fallback, improved diagnostics removed.
+Trading Scanner v7.1 – Pools (S&P / Nasdaq / EuroStoxx) + optional market check,
+configurable RSI/ATR prefilters, hourly->daily fallback, silent info fetch failures removed.
 Start: streamlit run scanner.py
 """
 
@@ -294,12 +294,12 @@ def build_levels(price, atr, direction: str):
     rr = abs(tp2 - price) / abs(price - sl) if abs(price - sl) > 1e-9 else None
     return dict(entry=price, sl=sl, tp1=tp1, tp2=tp2, ko=ko, rr=rr)
 
-# ---------------- Prefilter with diagnostics (keeps removed list) ----------------
+# ---------------- Prefilter with silent info failures ----------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
     """
     Returns tuple (kept_list, removed_list, checked_count)
-    Uses yfinance Ticker.info; some tickers (especially EU with suffixes) may not return marketCap/averageVolume.
+    Uses yfinance Ticker.info; info fetch failures are treated silently (not added to removed list).
     """
     keep = []
     removed = []
@@ -311,7 +311,7 @@ def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
         try:
             info = yf.Ticker(t).info
         except Exception:
-            removed.append((t, "info_error"))
+            # silent: skip adding an 'info_error' entry to removed list
             continue
         mcap = info.get("marketCap") or info.get("market_cap")
         avgvol = info.get("averageVolume") or info.get("averageVolume10days") or info.get("volume")
@@ -460,14 +460,15 @@ with st.spinner("Prefilter läuft (MarketCap / AvgVolume)…"):
     removed_count = len(removed_list)
     st.write(f"Prefilter geprüft: {checked} tickers · entfernt: {removed_count}")
     if removed_count:
-        # show short summary of removal reasons (top 5)
-        reasons = [r for (_, r) in removed_list]
+        # filter out any 'info_error' entries (we no longer add them), show top removal reasons
+        reasons = [r for (_, r) in removed_list if r != "info_error"]
         rc = {}
         for r in reasons:
             rc[r] = rc.get(r, 0) + 1
-        st.write("Entfernungsgründe (Top):")
-        for k, v in sorted(rc.items(), key=lambda x: -x[1])[:5]:
-            st.write(f"- {k}: {v}")
+        if rc:
+            st.write("Entfernungsgründe (Top):")
+            for k, v in sorted(rc.items(), key=lambda x: -x[1])[:5]:
+                st.write(f"- {k}: {v}")
     if not pool_prefiltered:
         st.warning("Prefilter hat keine Ticker zurückgegeben. Pool wird ungefiltert verwendet.")
         pool_prefiltered = base_pool
