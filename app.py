@@ -1,10 +1,8 @@
 """
-Trading Scanner v8 – Analystenratings integriert
-- Datenquelle: yfinance (Yahoo Finance)
-- Analystenratings werden gecached und in Scan + Detailansicht angezeigt
-- Im Chart wird der aktuelle Kurs mit einem schwarzen Punkt und Rating-Label markiert
-- Pools: S&P 500 / Nasdaq-100 / EuroStoxx50 (sample lists)
-- Prefilter, optionaler Markt-Check, RSI/ATR-Parameter, hourly->daily fallback
+Trading Scanner v8.1 – Analysten nur für Top-N Signale
+- Datenquelle: yfinance (historische Kurse + optional Analysten)
+- Optionale IEX-Cloud Platzhalter (API-Key erforderlich)
+- Prefilter, hourly->daily fallback, rule params
 Start: streamlit run scanner.py
 """
 
@@ -16,9 +14,9 @@ from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# ---------------- Page config & Theme ----------------
 st.set_page_config(page_title="Trading Scanner", page_icon="📡", layout="wide")
 
+# ---------------- UI (leichtes Grau) ----------------
 st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
@@ -31,7 +29,6 @@ st.markdown("""
   .mlabel { font-size:0.62rem; color:#6b7280; text-transform:uppercase; letter-spacing:1px; }
   .mvalue { font-family:'IBM Plex Mono',monospace; font-size:1rem; font-weight:600; color:#111827; }
   .ko-setup { background:#fff; border:1px solid #d1d5db; border-radius:8px; padding:8px; margin-bottom:8px; font-size:0.9rem; }
-  .ko-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:6px; }
   [data-testid="stDataFrame"] { border:1px solid #d1d5db; border-radius:8px; overflow:hidden; }
   table { font-size:0.9rem; }
   #MainMenu, footer, header { visibility:hidden; }
@@ -40,31 +37,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------- Pools (sample lists) ----------------
-SP500_TICKERS = [
-    "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","BRK-B","JPM","JNJ","V","PG","UNH","HD","MA",
-    "DIS","PYPL","ADBE","CMCSA","NFLX","INTC","PFE","KO","PEP","CSCO","XOM","CVX","ABBV","T","NKE",
-    "ORCL","ABT","CRM","AVGO","TXN","QCOM","COST","WMT","MCD","DHR","LLY","BMY","MDT","NEE","HON",
-    "AMGN","SBUX","LOW","INTU","MS","AXP","GILD","RTX","LIN","AMT","PLD","SCHW","SPGI","BLK","BKNG",
-    "ISRG","NOW","ZTS","LMT","GE","CAT","DE","MMM","SYK","ADI","BDX","CI","CB","TMO","EL","ADP","FIS"
-]
+SP500_TICKERS = ["AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","JPM","JNJ","V","PG","UNH","HD","MA"]
+NASDAQ100_TICKERS = ["AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","PYPL","ADBE","INTC","CSCO","QCOM"]
+EUROSTOXX50_TICKERS = ["ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI"]
 
-NASDAQ100_TICKERS = [
-    "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","PYPL","ADBE","CMCSA","INTC","CSCO","PEP","QCOM",
-    "AMGN","AVGO","TXN","NFLX","INTU","SBUX","GILD","ISRG","AMD","REGN","BIIB","LRCX","ADP","ILMN",
-    "DOCU","ZM","SNPS","MELI","EA","ROST","EXC","MNST","CTSH","WDAY"
-]
-
-EUROSTOXX50_TICKERS = [
-    "ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI",
-    "IBE.MC","TOTF.PA","VOW3.DE","BAS.DE","DTE.DE","MC.PA","PHIA.AS","CRH.I","AD.AS","ABI.BR",
-    "LVMH.PA","SHEL.L","ULVR.L","NESN.SW","NOVN.SW","ROG.SW","CS.PA","BN.PA","BAYN.DE","MC.PA"
-]
-
-POOLS = {
-    "S&P 500": SP500_TICKERS,
-    "Nasdaq-100": NASDAQ100_TICKERS,
-    "EuroStoxx50": EUROSTOXX50_TICKERS,
-}
+POOLS = {"S&P 500": SP500_TICKERS, "Nasdaq-100": NASDAQ100_TICKERS, "EuroStoxx50": EUROSTOXX50_TICKERS}
 
 # ---------------- Helpers ----------------
 def sf(x):
@@ -95,16 +72,13 @@ def load(ticker: str):
         df = yf.download(ticker, period="120d", interval="1h", progress=False)
     except Exception:
         df = None
-
     if df is None or df.empty or len(df) < 220:
         try:
             df = yf.download(ticker, period="720d", interval="1d", progress=False)
         except Exception:
             df = None
-
     if df is None or df.empty:
         return None
-
     df = df.reset_index()
     df = flatten(df)
     for col in ["Open","High","Low","Close","Volume"]:
@@ -112,8 +86,6 @@ def load(ticker: str):
             df[col] = to_series(df, col)
     if "Datetime" not in df.columns and "Date" in df.columns:
         df = df.rename(columns={"Date": "Datetime"})
-    if "Datetime" not in df.columns and "index" in df.columns:
-        df = df.rename(columns={"index": "Datetime"})
     cols = [c for c in ["Datetime","Open","High","Low","Close","Volume"] if c in df.columns]
     df = df.loc[:, cols].dropna()
     if df.empty:
@@ -177,40 +149,33 @@ def market_metrics():
     except Exception:
         return {"SPY_chg": None, "QQQ_chg": None, "VIX": None}
 
-# ---------------- Analysteninfo (gecached) ----------------
+# ---------------- Analysteninfo (yfinance) - gecached ----------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_ticker_info(ticker: str):
-    """
-    Liefert recommendationMean, recommendationKey, recommendationCount und ggf. letzte Empfehlung.
-    Caching reduziert wiederholte yfinance.info Aufrufe.
-    """
+def fetch_ticker_info_yf(ticker: str):
     try:
         t = yf.Ticker(ticker)
         info = t.info or {}
         rec_mean = info.get("recommendationMean")
         rec_key = info.get("recommendationKey")
         rec_count = info.get("recommendationCount")
-        # historische Empfehlungen (optional, kann leer sein)
-        last_rec = None
-        try:
-            rec_hist = t.recommendations
-            if rec_hist is not None and not rec_hist.empty:
-                last_row = rec_hist.iloc[-1]
-                last_rec = {
-                    "date": str(last_row.name) if last_row.name is not None else None,
-                    "firm": last_row.get("firm") if "firm" in last_row.index else None,
-                    "action": last_row.get("action") if "action" in last_row.index else None,
-                }
-        except Exception:
-            last_rec = None
-        return {
-            "rec_mean": rec_mean,
-            "rec_key": rec_key,
-            "rec_count": rec_count,
-            "last_rec": last_rec,
-        }
+        return {"rec_mean": rec_mean, "rec_key": rec_key, "rec_count": rec_count}
     except Exception:
-        return {"rec_mean": None, "rec_key": None, "rec_count": None, "last_rec": None}
+        return {"rec_mean": None, "rec_key": None, "rec_count": None}
+
+# ---------------- Optional: IEX Cloud placeholder (requires API key) ----------------
+# To enable IEX, implement fetch_ticker_info_iex with requests to IEX endpoints and set IEX_API_KEY.
+# Example placeholder (not active):
+"""
+import requests
+IEX_API_KEY = "YOUR_IEX_KEY"
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_ticker_info_iex(ticker: str):
+    # Map ticker to IEX symbol if needed, then call:
+    # url = f"https://cloud.iexapis.com/stable/stock/{symbol}/recommendation-trends?token={IEX_API_KEY}"
+    # resp = requests.get(url, timeout=10).json()
+    # parse resp to extract mean/key/count
+    return {"rec_mean": None, "rec_key": None, "rec_count": None}
+"""
 
 # ---------------- Entry quality / trend / levels ----------------
 def entry_quality(df: pd.DataFrame, direction: str):
@@ -281,7 +246,7 @@ def trend_score(df: pd.DataFrame):
     r = df.iloc[-1]; prev = df.iloc[-2]
     price = sf(r["Close"]); ema20 = sf(r["EMA20"]); ema50 = sf(r["EMA50"])
     ema200 = sf(r["EMA200"]); rsi = sf(r["RSI"]); macd = sf(r["MACD"])
-    msig = sf(r["MACD_signal"]); macdh = sf(df["MACD_hist"].iloc[-1]) if "MACD_hist" in df.columns else None
+    msig = sf(r["MACD_signal"]); macdh = sf(r["MACD_hist"]) if "MACD_hist" in df.columns else None
     pmacdh = sf(prev["MACD_hist"]) if "MACD_hist" in df.columns else None
     atr = sf(r["ATR"]); bbpct = sf(r["BB_pct"])
     if None in [price, ema20, ema50, ema200, rsi, macd, msig, atr]:
@@ -338,7 +303,6 @@ def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
         try:
             info = yf.Ticker(t).info
         except Exception:
-            # silent skip on info fetch failure
             continue
         mcap = info.get("marketCap") or info.get("market_cap")
         avgvol = info.get("averageVolume") or info.get("averageVolume10days") or info.get("volume")
@@ -394,7 +358,7 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
 
     return ok, reasons
 
-# ---------------- Scan (mit Analysteninfo) ----------------
+# ---------------- Scan (ohne Analysten) ----------------
 @st.cache_data(ttl=300, show_spinner=False)
 def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min, atr_max):
     results = []
@@ -422,20 +386,12 @@ def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min,
             p0 = sf(prev.iloc[-1]["Close"])
             if p0:
                 chg = (price - p0) / p0 * 100
-
-        # Analysteninfo nur hier abfragen (gecached)
-        info = fetch_ticker_info(ticker)
-        rec_mean = info.get("rec_mean")
-        rec_key = info.get("rec_key")
-        rec_count = info.get("rec_count")
-
         rules_ok, reasons = evaluate_rules(df, direction, price, atr, market,
                                            require_market=require_market,
                                            rsi_min=rsi_min, rsi_max=rsi_max,
                                            atr_min=atr_min, atr_max=atr_max)
         results.append({
             "Ticker": ticker,
-            "Sektor": "–",
             "Dir": direction,
             "Trend": ts,
             "Entry-Q": eq,
@@ -444,9 +400,6 @@ def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min,
             "ATR%": round(atr / price * 100, 2),
             "RR": round(levels["rr"], 1) if levels["rr"] is not None else None,
             "Chg%": round(chg, 2) if chg else None,
-            "Analyst_Mean": round(rec_mean, 2) if rec_mean is not None else None,
-            "Analyst_Key": rec_key,
-            "Analyst_Count": rec_count,
             "Rules_OK": rules_ok,
             "Fail_Reasons": "; ".join(reasons) if reasons else "",
         })
@@ -471,10 +424,11 @@ with st.sidebar:
     rsi_min, rsi_max = st.slider("RSI Range", 30, 80, (45, 60))
     atr_min, atr_max = st.slider("ATR% Range", 0.1, 6.0, (0.5, 3.0), step=0.1)
     st.markdown("---")
-    st.markdown("### 🔰 KO-Setups (Info)")
-    st.markdown('<div class="ko-setup"><strong>Konservativ</strong>: Barrier ≈ Preis − 2.5 × ATR · Weit, niedriger Hebel.</div>', unsafe_allow_html=True)
-    st.markdown('<div class="ko-setup"><strong>Moderat</strong>: Barrier ≈ Preis − 1.5 × ATR · Ausgewogen.</div>', unsafe_allow_html=True)
-    st.markdown('<div class="ko-setup"><strong>Aggressiv</strong>: Barrier ≈ Preis − 0.7 × ATR · Eng, hoher Hebel.</div>', unsafe_allow_html=True)
+    st.markdown("### 🔎 Analysten (Top‑N)")
+    top_n = st.number_input("Top N Signale für Analysteninfos", min_value=0, max_value=50, value=5, step=1)
+    use_iex = st.checkbox("Use IEX Cloud for analyst data (requires API key)", value=False)
+    if use_iex:
+        st.text_input("IEX API Key", key="iex_api_key", type="password")
     st.markdown("---")
     if st.button("🔄 Neu laden"):
         st.cache_data.clear()
@@ -487,29 +441,42 @@ st.info(f"Pool: {pool_choice} · Kandidaten (sample): {len(base_pool)}")
 
 with st.spinner("Prefilter läuft (MarketCap / AvgVolume)…"):
     pool_prefiltered, removed_list, checked = prefilter_tickers(base_pool, min_mcap=min_mcap, min_avgvol=min_avgvol, max_checks=int(max_info_checks))
-    removed_count = len(removed_list)
-    st.write(f"Prefilter geprüft: {checked} tickers · entfernt: {removed_count}")
-    if removed_count:
-        reasons = [r for (_, r) in removed_list]
-        rc = {}
-        for r in reasons:
-            rc[r] = rc.get(r, 0) + 1
-        if rc:
-            st.write("Entfernungsgründe (Top):")
-            for k, v in sorted(rc.items(), key=lambda x: -x[1])[:5]:
-                st.write(f"- {k}: {v}")
     if not pool_prefiltered:
         st.warning("Prefilter hat keine Ticker zurückgegeben. Pool wird ungefiltert verwendet.")
         pool_prefiltered = base_pool
 
-# ---------------- Run scan ----------------
+# ---------------- Run scan (ohne Analysten) ----------------
 with st.spinner("Scanner läuft …"):
     results = run_scan(min_score, pool_prefiltered, require_market, rsi_min, rsi_max, atr_min, atr_max)
 
-# ---------------- If no results, guidance and stop ----------------
 if results.empty:
-    st.warning("Keine Signale gefunden. Mögliche Ursachen: Regeln zu strikt, Prefilter entfernt viele Kandidaten oder Datenqualität.")
+    st.warning("Keine Signale gefunden. Regeln anpassen oder Pool wechseln.")
     st.stop()
+
+# ---------------- Fetch analyst data only for Top-N ----------------
+top_n = int(top_n)
+if top_n > 0:
+    top_tickers = list(results.head(top_n)["Ticker"])
+    # choose source
+    if use_iex:
+        # Placeholder: implement fetch_ticker_info_iex and call it here
+        # For now fallback to yfinance if IEX not implemented
+        for t in top_tickers:
+            info = fetch_ticker_info_yf(t)
+            results.loc[results["Ticker"] == t, "Analyst_Mean"] = info.get("rec_mean")
+            results.loc[results["Ticker"] == t, "Analyst_Key"] = info.get("rec_key")
+            results.loc[results["Ticker"] == t, "Analyst_Count"] = info.get("rec_count")
+    else:
+        for t in top_tickers:
+            info = fetch_ticker_info_yf(t)
+            results.loc[results["Ticker"] == t, "Analyst_Mean"] = info.get("rec_mean")
+            results.loc[results["Ticker"] == t, "Analyst_Key"] = info.get("rec_key")
+            results.loc[results["Ticker"] == t, "Analyst_Count"] = info.get("rec_count")
+else:
+    # ensure columns exist
+    results["Analyst_Mean"] = None
+    results["Analyst_Key"] = None
+    results["Analyst_Count"] = None
 
 # ---------------- Summary metrics ----------------
 lc = len(results[results["Dir"] == "LONG"])
@@ -534,58 +501,16 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------- Table (inkl. Analysteninfo) ----------------
-disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Analyst_Mean","Analyst_Key","Analyst_Count","Rules_OK"]].copy()
+# ---------------- Table (inkl. Analysteninfo nur für Top-N) ----------------
+disp = results.copy()
+disp["Analyst_Mean"] = disp.get("Analyst_Mean")
+disp["Analyst_Key"] = disp.get("Analyst_Key")
+disp["Analyst_Count"] = disp.get("Analyst_Count")
 
-def color_dir_html(v):
-    if v == "LONG": return '<span style="color:#0b5fff;font-weight:600">LONG</span>'
-    if v == "SHORT": return '<span style="color:#ef4444;font-weight:600">SHORT</span>'
-    return str(v)
-
-def color_trend_html(v):
-    try: vv = float(v)
-    except Exception: return str(v)
-    if vv >= 80: return f'<span style="color:#059669;font-weight:600">{int(vv)}</span>'
-    if vv >= 65: return f'<span style="color:#0b5fff">{int(vv)}</span>'
-    return f"{int(vv)}"
-
-def color_entry_html(v):
-    try: vv = float(v)
-    except Exception: return str(v)
-    if vv >= 70: return f'<span style="color:#059669;font-weight:600">{int(vv)}</span>'
-    if vv >= 50: return f'<span style="color:#f59e0b">{int(vv)}</span>'
-    return f'<span style="color:#ef4444">{int(vv)}</span>'
-
-def color_chg_html(v):
-    if v is None or (isinstance(v, float) and np.isnan(v)): return "–"
-    try: vv = float(v)
-    except Exception: return str(v)
-    if vv > 0: return f'<span style="color:#059669">+{vv:.2f}%</span>'
-    return f'<span style="color:#ef4444">{vv:.2f}%</span>'
-
-def color_rules_html(v):
-    if v: return '<span style="background:#ecfdf5;color:#065f46;padding:3px 6px;border-radius:4px;">OK</span>'
-    return '<span style="background:#fef2f2;color:#7f1d1d;padding:3px 6px;border-radius:4px;">FAIL</span>'
-
-table = pd.DataFrame({
-    "Ticker": disp["Ticker"],
-    "Sektor": disp["Sektor"],
-    "Dir": disp["Dir"].apply(color_dir_html),
-    "Trend": disp["Trend"].apply(color_trend_html),
-    "Entry-Q": disp["Entry-Q"].apply(color_entry_html),
-    "Price": disp["Price"].apply(lambda x: f"{x:.2f}"),
-    "RSI": disp["RSI"].apply(lambda x: f"{x:.1f}" if x is not None else "–"),
-    "ATR%": disp["ATR%"].apply(lambda x: f"{x:.2f}%"),
-    "RR": disp["RR"].apply(lambda x: f"{x:.1f}" if x is not None else "–"),
-    "Chg%": disp["Chg%"].apply(color_chg_html),
-    "Analyst Mean": results["Analyst_Mean"].apply(lambda x: f"{x:.2f}" if x is not None else "–"),
-    "Analyst Key": results["Analyst_Key"].fillna("–"),
-    "Analyst Count": results["Analyst_Count"].apply(lambda x: str(x) if x is not None else "–"),
-    "Rules": disp["Rules_OK"].apply(color_rules_html),
-})
+table = disp[["Ticker","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Analyst_Mean","Analyst_Key","Analyst_Count","Rules_OK"]].copy()
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-# ---------------- Detail view (mit schwarzem Punkt für Analystenrating) ----------------
+# ---------------- Detail view (fetch analyst info on demand if missing) ----------------
 selected = st.selectbox("Detailansicht Ticker", options=list(results["Ticker"]), index=0)
 df_detail = load(selected)
 if df_detail is None:
@@ -598,57 +523,38 @@ else:
     price = sf(last["Close"]); atr = sf(last["ATR"])
     levels = build_levels(price, atr, direction)
 
-    # fetch analyst info for selected ticker (cached)
-    ainfo = fetch_ticker_info(selected)
-    rec_mean = ainfo.get("rec_mean")
-    rec_key = ainfo.get("rec_key")
-    rec_count = ainfo.get("rec_count")
+    # If analyst info not present for selected, fetch on demand (cached)
+    if pd.isna(results.loc[results["Ticker"] == selected, "Analyst_Mean"]).all():
+        info = fetch_ticker_info_yf(selected)
+        rec_mean = info.get("rec_mean"); rec_key = info.get("rec_key"); rec_count = info.get("rec_count")
+    else:
+        rec_mean = results.loc[results["Ticker"] == selected, "Analyst_Mean"].iloc[0]
+        rec_key = results.loc[results["Ticker"] == selected, "Analyst_Key"].iloc[0]
+        rec_count = results.loc[results["Ticker"] == selected, "Analyst_Count"].iloc[0]
 
     st.markdown(f"### {selected} – {direction} – TrendScore {ts} – EntryQ {eq_score}")
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6,0.2,0.2], vertical_spacing=0.03)
-
-    # Candles + EMAs + Bollinger
-    fig.add_trace(go.Candlestick(
-        x=df_detail["Datetime"], open=df_detail["Open"], high=df_detail["High"],
-        low=df_detail["Low"], close=df_detail["Close"], name="Preis",
-        increasing_line_color="#059669", decreasing_line_color="#ef4444"
-    ), row=1, col=1)
+    fig.add_trace(go.Candlestick(x=df_detail["Datetime"], open=df_detail["Open"], high=df_detail["High"], low=df_detail["Low"], close=df_detail["Close"], name="Preis"), row=1, col=1)
     for col, color in [("EMA20","#0b5fff"),("EMA50","#6366f1"),("EMA200","#f59e0b")]:
         fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail[col], line=dict(color=color, width=1.2), name=col), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["BB_upper"], line=dict(color="#9ca3af", width=1, dash="dot"), showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["BB_lower"], line=dict(color="#9ca3af", width=1, dash="dot"), fill="tonexty", fillcolor="rgba(156,163,175,0.10)", showlegend=False), row=1, col=1)
-
-    # Markiere aktuellen Kurs mit schwarzem Punkt und Rating-Label (falls vorhanden)
+    # marker for analyst rating (black dot) if available
     try:
         last_dt = df_detail["Datetime"].iloc[-1]
         marker_text = f"Rating: {rec_mean:.2f} ({rec_key})" if rec_mean is not None else (f"{rec_key}" if rec_key else "n/a")
         marker_size = 10 if rec_count is None else min(max(6, int(4 + np.log1p(rec_count)*2)), 18)
-        fig.add_trace(go.Scatter(
-            x=[last_dt], y=[price],
-            mode="markers+text",
-            marker=dict(color="black", size=marker_size),
-            text=[marker_text],
-            textposition="top center",
-            name="Analyst Rating"
-        ), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[last_dt], y=[price], mode="markers+text",
+                                 marker=dict(color="black", size=marker_size),
+                                 text=[marker_text], textposition="top center", name="Analyst Rating"), row=1, col=1)
     except Exception:
         pass
-
-    # RSI
     fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["RSI"], line=dict(color="#0b5fff", width=1.2), name="RSI"), row=2, col=1)
-    for lvl, col in [(70,"#ef4444"),(50,"#9ca3af"),(30,"#059669")]:
-        fig.add_hline(y=lvl, line_color=col, line_dash="dot", line_width=1, row=2, col=1)
-
-    # MACD hist + MACD lines
     hist_c = ["#059669" if v >= 0 else "#ef4444" for v in df_detail["MACD_hist"]]
     fig.add_trace(go.Bar(x=df_detail["Datetime"], y=df_detail["MACD_hist"], marker_color=hist_c, name="MACD_hist"), row=3, col=1)
     fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["MACD"], line=dict(color="#0b5fff", width=1.2), name="MACD"), row=3, col=1)
     fig.add_trace(go.Scatter(x=df_detail["Datetime"], y=df_detail["MACD_signal"], line=dict(color="#f59e0b", width=1.2), name="Signal"), row=3, col=1)
-
     fig.update_layout(height=700, paper_bgcolor="#f2f4f6", plot_bgcolor="#ffffff", margin=dict(l=5,r=5,t=10,b=5), xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Entry quality pills
     st.markdown("#### Entry-Qualität")
     pills = []
     for txt, kind in eq_sigs:
@@ -656,15 +562,11 @@ else:
         pills.append(f'<span style="{cls} margin-right:6px;">{txt}</span>')
     st.markdown(" ".join(pills), unsafe_allow_html=True)
 
-    # Analysteninfo anzeigen
     st.markdown("#### Analystenrating")
     st.write(f"- **Mean**: {rec_mean if rec_mean is not None else 'n/a'}")
     st.write(f"- **Key**: {rec_key if rec_key else 'n/a'}")
     st.write(f"- **Count**: {rec_count if rec_count is not None else 'n/a'}")
-    if ainfo.get("last_rec"):
-        st.write(f"- **Letzte Empfehlung**: {ainfo['last_rec']}")
 
-    # Regel-Check
     st.markdown("#### Regel-Check (Scan)")
     row = results[results["Ticker"] == selected].iloc[0]
     if row["Rules_OK"]:
