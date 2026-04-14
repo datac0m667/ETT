@@ -1,9 +1,9 @@
 """
-Trading Scanner v4 – S&P pool + automatic prefilter
-- Adds: Pool selection (Manual / SP500 / Nasdaq100 placeholder)
-- Adds: Automatic prefilter by marketCap and averageVolume before scanning
-- Sidebar controls: pool choice, min market cap, min avg volume
-- Keeps light gray UI and trading rules
+Trading Scanner v5 – Pools: S&P 500 / Nasdaq / EuroStoxx + automatic prefilter
+- Manual watchlist removed
+- Pools available: S&P 500 (sample), Nasdaq-100 (sample), EuroStoxx50 (sample)
+- Prefilter by marketCap and averageVolume before scanning
+- Light gray UI, trading rules enforced and reported
 Start: streamlit run scanner.py
 """
 
@@ -16,9 +16,11 @@ from urllib.parse import quote
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# ─────────────────────────────────────────────────────────
+#  PAGE CONFIG + THEME
+# ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="Trading Scanner", page_icon="📡", layout="wide")
 
-# ---------------- UI THEME (light gray) ----------------
 st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
@@ -39,17 +41,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- WATCHLISTS / POOLS ----------------
-# Manual watchlist (kept small by default)
-WATCHLIST = {
-    "Tech": ["AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","CRM"],
-    "Semis": ["AMD","AVGO","QCOM","INTC","MU","AMAT","LRCX","TXN"],
-    "Finance": ["JPM","BAC","V","MA","GS","MS"],
-}
-ALL_TICKERS_MANUAL = [t for g in WATCHLIST.values() for t in g]
-TICKER_TO_SECTOR = {t: s for s, ts in WATCHLIST.items() for t in ts}
-
-# Built-in S&P 500 sample pool (representative subset). You can replace with full list CSV if desired.
+# ─────────────────────────────────────────────────────────
+#  POOLS (sample tickers)
+#  Replace or extend these lists with full index constituents if desired.
+# ─────────────────────────────────────────────────────────
 SP500_TICKERS = [
     "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","BRK-B","JPM","JNJ","V","PG","UNH","HD","MA",
     "DIS","PYPL","ADBE","CMCSA","NFLX","INTC","PFE","KO","PEP","CSCO","XOM","CVX","ABBV","T","NKE",
@@ -57,13 +52,29 @@ SP500_TICKERS = [
     "AMGN","SBUX","LOW","INTU","MS","AXP","GILD","RTX","LIN","AMT","PLD","SCHW","SPGI","BLK","BKNG",
     "ISRG","NOW","ZTS","LMT","GE","CAT","DE","MMM","SYK","ADI","BDX","CI","CB","TMO","EL","ADP","FIS"
 ]
-# Placeholder Nasdaq-100 sample (can be replaced)
+
 NASDAQ100_TICKERS = [
     "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","PYPL","ADBE","CMCSA","INTC","CSCO","PEP","QCOM",
-    "AMGN","AVGO","TXN","NFLX","INTU","SBUX","GILD","ISRG","AMD","REGN","BIIB","LRCX","ADP","ILMN"
+    "AMGN","AVGO","TXN","NFLX","INTU","SBUX","GILD","ISRG","AMD","REGN","BIIB","LRCX","ADP","ILMN",
+    "DOCU","ZM","SNPS","MELI","EA","ROST","EXC","MNST","CTSH","WDAY"
 ]
 
-# ---------------- HELPERS ----------------
+EUROSTOXX50_TICKERS = [
+    "ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI",
+    "IBE.MC","TOTF.PA","VOW3.DE","BAS.DE","DTE.DE","MC.PA","PHIA.AS","CRH.I","AD.AS","ABI.BR",
+    "LVMH.PA","MC.PA","SHEL.L","ULVR.L","NESN.SW","NOVN.SW","ROG.SW","CS.PA","BN.PA","BAYN.DE"
+]
+
+# Map pool names to lists
+POOLS = {
+    "S&P 500 (sample)": SP500_TICKERS,
+    "Nasdaq-100 (sample)": NASDAQ100_TICKERS,
+    "EuroStoxx50 (sample)": EUROSTOXX50_TICKERS,
+}
+
+# ─────────────────────────────────────────────────────────
+#  HELPERS
+# ─────────────────────────────────────────────────────────
 def sf(x):
     try:
         if isinstance(x, pd.Series):
@@ -85,7 +96,9 @@ def to_series(df, col):
         s = s.iloc[:, 0]
     return pd.to_numeric(s, errors="coerce")
 
-# ---------------- DATA LOADING ----------------
+# ─────────────────────────────────────────────────────────
+#  DATA LOADING
+# ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def load(ticker: str):
     try:
@@ -111,7 +124,9 @@ def get_eur_usd():
     except Exception:
         return 1.09
 
-# ---------------- INDICATORS ----------------
+# ─────────────────────────────────────────────────────────
+#  INDICATORS
+# ─────────────────────────────────────────────────────────
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     c = df["Close"]
@@ -140,7 +155,9 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["Vol_avg"] = df["Volume"].rolling(20).mean()
     return df.dropna()
 
-# ---------------- MARKET METRICS ----------------
+# ─────────────────────────────────────────────────────────
+#  MARKET METRICS
+# ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def market_metrics():
     try:
@@ -159,7 +176,9 @@ def market_metrics():
     except Exception:
         return {"SPY_chg": None, "QQQ_chg": None, "VIX": None}
 
-# ---------------- ENTRY / TREND / LEVELS (unchanged) ----------------
+# ─────────────────────────────────────────────────────────
+#  ENTRY QUALITY / TREND / LEVELS
+# ─────────────────────────────────────────────────────────
 def entry_quality(df: pd.DataFrame, direction: str):
     r = df.iloc[-1]; prev = df.iloc[-2]
     price = sf(r["Close"]); ema20 = sf(r["EMA20"]); atr = sf(r["ATR"])
@@ -271,18 +290,11 @@ def build_levels(price, atr, direction: str):
     rr = abs(tp2 - price) / abs(price - sl) if abs(price - sl) > 1e-9 else None
     return dict(entry=price, sl=sl, tp1=tp1, tp2=tp2, ko=ko, rr=rr)
 
-# ---------------- KO proposals removed (not used) ----------------
-
-# ---------------- PREFILTER (marketCap & avgVolume) ----------------
+# ─────────────────────────────────────────────────────────
+#  PREFILTER (marketCap & avgVolume)
+# ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=200):
-    """
-    Prefilter tickers by marketCap and averageVolume using yfinance Ticker.info.
-    - min_mcap in USD
-    - min_avgvol absolute number
-    - max_checks limits number of info calls to avoid long runs
-    Returns list of tickers that pass.
-    """
     keep = []
     checked = 0
     for t in tickers:
@@ -301,7 +313,9 @@ def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=200):
             continue
     return keep
 
-# ---------------- RULE ENGINE ----------------
+# ─────────────────────────────────────────────────────────
+#  RULE ENGINE
+# ─────────────────────────────────────────────────────────
 def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, market: dict):
     reasons = []; ok = True
     ema20 = sf(df["EMA20"].iloc[-1]); ema50 = sf(df["EMA50"].iloc[-1]); ema200 = sf(df["EMA200"].iloc[-1])
@@ -331,7 +345,9 @@ def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, m
         ok = False; reasons.append("Marktumfeld nicht ideal (SPY/QQQ/VIX).")
     return ok, reasons
 
-# ---------------- SCAN ----------------
+# ─────────────────────────────────────────────────────────
+#  SCAN
+# ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def run_scan(min_score, pool_tickers):
     results = []
@@ -359,7 +375,7 @@ def run_scan(min_score, pool_tickers):
         rules_ok, reasons = evaluate_rules(df, direction, price, atr, market)
         results.append({
             "Ticker": ticker,
-            "Sektor": TICKER_TO_SECTOR.get(ticker, "–"),
+            "Sektor": "–",
             "Dir": direction,
             "Trend": ts,
             "Entry-Q": eq,
@@ -376,11 +392,13 @@ def run_scan(min_score, pool_tickers):
         df_out = df_out.sort_values(["Rules_OK", "Trend", "Entry-Q"], ascending=[False, False, False]).reset_index(drop=True)
     return df_out
 
-# ---------------- SIDEBAR: Pool selection + prefilter controls ----------------
+# ─────────────────────────────────────────────────────────
+#  SIDEBAR: Pool selection + prefilter controls
+# ─────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Scanner")
     min_score = st.slider("Mindest-Trend-Score", 40, 90, 60, 5)
-    pool_choice = st.selectbox("Pool wählen", ["Manual Watchlist", "S&P 500 (sample)", "Nasdaq-100 (sample)"])
+    pool_choice = st.selectbox("Pool wählen", list(POOLS.keys()))
     st.markdown("---")
     st.markdown("### 🔎 Prefilter (vor Scan)")
     min_mcap = st.number_input("Min MarketCap (USD)", value=5_000_000_000, step=1_000_000_000, format="%d")
@@ -397,35 +415,31 @@ with st.sidebar:
         st.rerun()
     st.markdown(f'<p style="font-size:0.72rem;color:#6b7280;">{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} · EUR/USD auto</p>', unsafe_allow_html=True)
 
-# ---------------- Determine pool tickers and apply prefilter ----------------
-if pool_choice == "Manual Watchlist":
-    base_pool = ALL_TICKERS_MANUAL
-elif pool_choice == "S&P 500 (sample)":
-    base_pool = SP500_TICKERS
-else:
-    base_pool = NASDAQ100_TICKERS
-
+# ─────────────────────────────────────────────────────────
+#  Determine pool tickers and apply prefilter
+# ─────────────────────────────────────────────────────────
+base_pool = POOLS.get(pool_choice, [])
 st.info(f"Pool: {pool_choice} · Kandidaten: {len(base_pool)}")
 
 with st.spinner("Prefilter läuft (MarketCap / AvgVolume)…"):
-    # prefilter may be slow; limited by max_info_checks
     pool_prefiltered = prefilter_tickers(base_pool, min_mcap=min_mcap, min_avgvol=min_avgvol, max_checks=int(max_info_checks))
     if not pool_prefiltered:
         st.warning("Prefilter hat keine Ticker zurückgegeben. Pool wird ungefiltert verwendet.")
         pool_prefiltered = base_pool
 
-# ---------------- Run scan ----------------
+# ─────────────────────────────────────────────────────────
+#  Run scan
+# ─────────────────────────────────────────────────────────
 with st.spinner("Scanner läuft …"):
     results = run_scan(min_score, pool_prefiltered)
 
-# ---------------- Filter by direction ----------------
-dir_filter = None  # kept for compatibility with previous UI (not in sidebar now)
-# show results
 if results.empty:
     st.info("Keine Signale gefunden. Filter anpassen oder Pool wechseln.")
     st.stop()
 
-# ---------------- SUMMARY ----------------
+# ─────────────────────────────────────────────────────────
+#  SUMMARY
+# ─────────────────────────────────────────────────────────
 lc = len(results[results["Dir"] == "LONG"])
 sc = len(results[results["Dir"] == "SHORT"])
 aq = int(results["Entry-Q"].mean()) if not results.empty else 0
@@ -448,7 +462,9 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------- TABLE (HTML colored) ----------------
+# ─────────────────────────────────────────────────────────
+#  TABLE (HTML colored)
+# ─────────────────────────────────────────────────────────
 disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK"]].copy()
 
 def color_dir_html(v):
@@ -496,7 +512,9 @@ table = pd.DataFrame({
 })
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-# ---------------- DETAIL VIEW (no KO proposals) ----------------
+# ─────────────────────────────────────────────────────────
+#  DETAIL VIEW (no KO proposals)
+# ─────────────────────────────────────────────────────────
 selected = st.selectbox("Detailansicht Ticker", options=list(results["Ticker"]), index=0)
 df_detail = load(selected)
 if df_detail is None:
@@ -510,7 +528,6 @@ else:
     levels = build_levels(price, atr, direction)
 
     st.markdown(f"### {selected} – {direction} – TrendScore {ts} – EntryQ {eq_score}")
-    # simple chart (candles + EMAs)
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6,0.2,0.2], vertical_spacing=0.03)
     fig.add_trace(go.Candlestick(x=df_detail["Datetime"], open=df_detail["Open"], high=df_detail["High"], low=df_detail["Low"], close=df_detail["Close"], name="Preis"), row=1, col=1)
     for col, color in [("EMA20","#0b5fff"),("EMA50","#6366f1"),("EMA200","#f59e0b")]:
