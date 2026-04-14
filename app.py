@@ -1,11 +1,10 @@
 """
-Trading Scanner – Cleaned Final Version
-- Pools: S&P 500 / Nasdaq-100 / EuroStoxx50 (sample lists)
-- Prefilter by marketCap & avgVolume
-- Hourly -> daily fallback for data loading
-- Scan rules configurable via sidebar
-- Analystenratings fetched only for Top-N signals (yfinance)
-- Removed unused imports, debug outputs, and legacy code
+Trading Scanner – Analystenratings sichtbar machen (korrigierte Version)
+- Datenquelle: yfinance (Yahoo Finance)
+- Analystendaten werden nur für Top-N Signale abgefragt (konfigurierbar)
+- Robustere Handhabung fehlender recommendation-Felder (NaN -> None)
+- Top-N Auswahl: nur echte Signale (Rules_OK True) und nach Entry-Q/Trend sortiert
+- Detailansicht: on-demand Fetch falls für den Ticker noch keine Analystendaten vorliegen
 Start: streamlit run scanner.py
 """
 
@@ -31,7 +30,6 @@ st.markdown("""
   .metric { background:#fff; border:1px solid #d1d5db; border-radius:8px; padding:8px 12px; flex:1; min-width:80px; }
   .mlabel { font-size:0.62rem; color:#6b7280; text-transform:uppercase; letter-spacing:1px; }
   .mvalue { font-family:'IBM Plex Mono',monospace; font-size:1rem; font-weight:600; color:#111827; }
-  .ko-setup { background:#fff; border:1px solid #d1d5db; border-radius:8px; padding:8px; margin-bottom:8px; font-size:0.9rem; }
   [data-testid="stDataFrame"] { border:1px solid #d1d5db; border-radius:8px; overflow:hidden; }
   table { font-size:0.9rem; }
   #MainMenu, footer, header { visibility:hidden; }
@@ -40,24 +38,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------- Pools (sample lists) ----------------
-SP500_TICKERS = [
-    "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","BRK-B","JPM","JNJ","V","PG","UNH","HD","MA",
-    "DIS","PYPL","ADBE","CMCSA","NFLX","INTC","PFE","KO","PEP","CSCO","XOM","CVX","ABBV","T","NKE"
-]
+SP500_TICKERS = ["AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","JPM","JNJ","V","PG","UNH","HD","MA"]
+NASDAQ100_TICKERS = ["AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","PYPL","ADBE","INTC","CSCO","QCOM"]
+EUROSTOXX50_TICKERS = ["ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI"]
 
-NASDAQ100_TICKERS = [
-    "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","PYPL","ADBE","INTC","CSCO","QCOM","AMGN","AVGO","TXN"
-]
-
-EUROSTOXX50_TICKERS = [
-    "ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI"
-]
-
-POOLS = {
-    "S&P 500": SP500_TICKERS,
-    "Nasdaq-100": NASDAQ100_TICKERS,
-    "EuroStoxx50": EUROSTOXX50_TICKERS,
-}
+POOLS = {"S&P 500": SP500_TICKERS, "Nasdaq-100": NASDAQ100_TICKERS, "EuroStoxx50": EUROSTOXX50_TICKERS}
 
 # ---------------- Helpers ----------------
 def sf(x):
@@ -84,24 +69,17 @@ def to_series(df, col):
 # ---------------- Data loader with hourly -> daily fallback ----------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load(ticker: str):
-    """
-    Try hourly 120d first. If insufficient rows, fallback to daily 720d.
-    Returns DataFrame with columns: Datetime, Open, High, Low, Close, Volume
-    """
     try:
         df = yf.download(ticker, period="120d", interval="1h", progress=False)
     except Exception:
         df = None
-
     if df is None or df.empty or len(df) < 220:
         try:
             df = yf.download(ticker, period="720d", interval="1d", progress=False)
         except Exception:
             df = None
-
     if df is None or df.empty:
         return None
-
     df = df.reset_index()
     df = flatten(df)
     for col in ["Open","High","Low","Close","Volume"]:
@@ -109,8 +87,6 @@ def load(ticker: str):
             df[col] = to_series(df, col)
     if "Datetime" not in df.columns and "Date" in df.columns:
         df = df.rename(columns={"Date": "Datetime"})
-    if "Datetime" not in df.columns and "index" in df.columns:
-        df = df.rename(columns={"index": "Datetime"})
     cols = [c for c in ["Datetime","Open","High","Low","Close","Volume"] if c in df.columns]
     df = df.loc[:, cols].dropna()
     if df.empty:
@@ -174,15 +150,24 @@ def market_metrics():
     except Exception:
         return {"SPY_chg": None, "QQQ_chg": None, "VIX": None}
 
-# ---------------- Analysteninfo (yfinance) - cached ----------------
+# ---------------- Analysteninfo (yfinance) - cached, robust ----------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_ticker_info_yf(ticker: str):
+    """
+    Liefert recommendationMean, recommendationKey, recommendationCount.
+    Wandelt NaN in None um, damit Anzeige zuverlässig funktioniert.
+    """
     try:
         t = yf.Ticker(ticker)
         info = t.info or {}
         rec_mean = info.get("recommendationMean")
         rec_key = info.get("recommendationKey")
         rec_count = info.get("recommendationCount")
+        # normalize NaN -> None
+        if rec_mean is not None and (isinstance(rec_mean, float) and np.isnan(rec_mean)):
+            rec_mean = None
+        if rec_count is not None and (isinstance(rec_count, float) and np.isnan(rec_count)):
+            rec_count = None
         return {"rec_mean": rec_mean, "rec_key": rec_key, "rec_count": rec_count}
     except Exception:
         return {"rec_mean": None, "rec_key": None, "rec_count": None}
@@ -312,7 +297,6 @@ def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
         try:
             info = yf.Ticker(t).info
         except Exception:
-            # silent skip if info fetch fails
             continue
         mcap = info.get("marketCap") or info.get("market_cap")
         avgvol = info.get("averageVolume") or info.get("averageVolume10days") or info.get("volume")
@@ -412,7 +396,7 @@ def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min,
         })
     df_out = pd.DataFrame(results)
     if not df_out.empty:
-        df_out = df_out.sort_values(["Rules_OK", "Trend", "Entry-Q"], ascending=[False, False, False]).reset_index(drop=True)
+        df_out = df_out.sort_values(["Rules_OK", "Entry-Q", "Trend"], ascending=[False, False, False]).reset_index(drop=True)
     return df_out
 
 # ---------------- Sidebar controls ----------------
@@ -457,19 +441,32 @@ if results.empty:
     st.warning("Keine Signale gefunden. Regeln anpassen oder Pool wechseln.")
     st.stop()
 
-# ---------------- Fetch analyst data only for Top-N signals ----------------
-top_n = int(top_n)
+# ---------------- Fetch analyst data only for Top-N signals (improved selection) ----------------
+# Auswahl: nur echte Signale (Rules_OK True), sortiert nach Entry-Q und Trend
 results["Analyst_Mean"] = None
 results["Analyst_Key"] = None
 results["Analyst_Count"] = None
 
+top_n = int(top_n)
 if top_n > 0:
-    top_tickers = list(results.head(top_n)["Ticker"])
-    for t in top_tickers:
+    # Filter nur gültige Signale, falls vorhanden; sonst fallback auf oberste Zeilen
+    valid_signals = results[results["Rules_OK"] == True]
+    if not valid_signals.empty:
+        candidates = valid_signals.sort_values(["Entry-Q","Trend"], ascending=[False, False]).head(top_n)["Ticker"].tolist()
+    else:
+        candidates = results.sort_values(["Entry-Q","Trend"], ascending=[False, False]).head(top_n)["Ticker"].tolist()
+
+    for t in candidates:
         info = fetch_ticker_info_yf(t)
-        results.loc[results["Ticker"] == t, "Analyst_Mean"] = info.get("rec_mean")
-        results.loc[results["Ticker"] == t, "Analyst_Key"] = info.get("rec_key")
-        results.loc[results["Ticker"] == t, "Analyst_Count"] = info.get("rec_count")
+        rec_mean = info.get("rec_mean")
+        rec_key = info.get("rec_key")
+        rec_count = info.get("rec_count")
+        # assign robustly (use .loc with index mask)
+        mask = results["Ticker"] == t if "Ticker" in results.columns else results.index == t
+        if mask.any():
+            results.loc[mask, "Analyst_Mean"] = rec_mean
+            results.loc[mask, "Analyst_Key"] = rec_key
+            results.loc[mask, "Analyst_Count"] = rec_count
 
 # ---------------- Summary metrics ----------------
 lc = len(results[results["Dir"] == "LONG"])
@@ -496,6 +493,11 @@ st.markdown(f"""
 
 # ---------------- Table (with Analyst info for Top-N) ----------------
 disp = results.copy()
+# Ensure columns exist for display
+for c in ["Analyst_Mean","Analyst_Key","Analyst_Count"]:
+    if c not in disp.columns:
+        disp[c] = None
+
 table = disp[["Ticker","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Analyst_Mean","Analyst_Key","Analyst_Count","Rules_OK"]].copy()
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
@@ -512,13 +514,19 @@ else:
     price = sf(last["Close"]); atr = sf(last["ATR"])
     levels = build_levels(price, atr, direction)
 
-    # If analyst info missing for selected, fetch on demand
-    rec_mean = results.loc[results["Ticker"] == selected, "Analyst_Mean"].iloc[0]
-    rec_key = results.loc[results["Ticker"] == selected, "Analyst_Key"].iloc[0]
-    rec_count = results.loc[results["Ticker"] == selected, "Analyst_Count"].iloc[0]
-    if pd.isna(rec_mean) and pd.isna(rec_key):
+    # If analyst info missing for selected, fetch on demand (cached)
+    rec_mean = results.loc[results["Ticker"] == selected, "Analyst_Mean"].iloc[0] if "Analyst_Mean" in results.columns else None
+    rec_key = results.loc[results["Ticker"] == selected, "Analyst_Key"].iloc[0] if "Analyst_Key" in results.columns else None
+    rec_count = results.loc[results["Ticker"] == selected, "Analyst_Count"].iloc[0] if "Analyst_Count" in results.columns else None
+
+    if (rec_mean is None or (isinstance(rec_mean, float) and np.isnan(rec_mean))) and (rec_key is None):
         info = fetch_ticker_info_yf(selected)
         rec_mean = info.get("rec_mean"); rec_key = info.get("rec_key"); rec_count = info.get("rec_count")
+        # write back into results for consistency
+        mask = results["Ticker"] == selected
+        results.loc[mask, "Analyst_Mean"] = rec_mean
+        results.loc[mask, "Analyst_Key"] = rec_key
+        results.loc[mask, "Analyst_Count"] = rec_count
 
     st.markdown(f"### {selected} – {direction} – TrendScore {ts} – EntryQ {eq_score}")
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6,0.2,0.2], vertical_spacing=0.03)
@@ -566,3 +574,4 @@ else:
         st.error("Nicht alle Trading-Regeln erfüllt – kein sauberes KO-Setup.")
         if row["Fail_Reasons"]:
             st.write(row["Fail_Reasons"])
+```
