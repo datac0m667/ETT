@@ -1,10 +1,11 @@
 """
-Trading Scanner – Analystenratings sichtbar machen (korrigierte Version)
-- Datenquelle: yfinance (Yahoo Finance)
-- Analystendaten werden nur für Top-N Signale abgefragt (konfigurierbar)
-- Robustere Handhabung fehlender recommendation-Felder (NaN -> None)
-- Top-N Auswahl: nur echte Signale (Rules_OK True) und nach Entry-Q/Trend sortiert
-- Detailansicht: on-demand Fetch falls für den Ticker noch keine Analystendaten vorliegen
+Trading Scanner – Final: IEX removed, Fail reasons visible in ticker table
+- Pools: S&P 500 / Nasdaq-100 / EuroStoxx50 (sample lists)
+- Prefilter by marketCap & avgVolume
+- Hourly -> daily fallback for data loading
+- Scan rules configurable via sidebar
+- Analystenratings fetched only for Top-N signals (yfinance)
+- Fail_Reasons column shown in results table
 Start: streamlit run scanner.py
 """
 
@@ -38,11 +39,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------- Pools (sample lists) ----------------
-SP500_TICKERS = ["AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","JPM","JNJ","V","PG","UNH","HD","MA"]
-NASDAQ100_TICKERS = ["AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","PYPL","ADBE","INTC","CSCO","QCOM"]
-EUROSTOXX50_TICKERS = ["ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI"]
+SP500_TICKERS = [
+    "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","BRK-B","JPM","JNJ","V","PG","UNH","HD","MA",
+    "DIS","PYPL","ADBE","CMCSA","NFLX","INTC","PFE","KO","PEP","CSCO","XOM","CVX","ABBV","T","NKE"
+]
 
-POOLS = {"S&P 500": SP500_TICKERS, "Nasdaq-100": NASDAQ100_TICKERS, "EuroStoxx50": EUROSTOXX50_TICKERS}
+NASDAQ100_TICKERS = [
+    "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","PYPL","ADBE","INTC","CSCO","QCOM","AMGN","AVGO","TXN"
+]
+
+EUROSTOXX50_TICKERS = [
+    "ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI"
+]
+
+POOLS = {
+    "S&P 500": SP500_TICKERS,
+    "Nasdaq-100": NASDAQ100_TICKERS,
+    "EuroStoxx50": EUROSTOXX50_TICKERS,
+}
 
 # ---------------- Helpers ----------------
 def sf(x):
@@ -69,17 +83,24 @@ def to_series(df, col):
 # ---------------- Data loader with hourly -> daily fallback ----------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load(ticker: str):
+    """
+    Try hourly 120d first. If insufficient rows, fallback to daily 720d.
+    Returns DataFrame with columns: Datetime, Open, High, Low, Close, Volume
+    """
     try:
         df = yf.download(ticker, period="120d", interval="1h", progress=False)
     except Exception:
         df = None
+
     if df is None or df.empty or len(df) < 220:
         try:
             df = yf.download(ticker, period="720d", interval="1d", progress=False)
         except Exception:
             df = None
+
     if df is None or df.empty:
         return None
+
     df = df.reset_index()
     df = flatten(df)
     for col in ["Open","High","Low","Close","Volume"]:
@@ -87,6 +108,8 @@ def load(ticker: str):
             df[col] = to_series(df, col)
     if "Datetime" not in df.columns and "Date" in df.columns:
         df = df.rename(columns={"Date": "Datetime"})
+    if "Datetime" not in df.columns and "index" in df.columns:
+        df = df.rename(columns={"index": "Datetime"})
     cols = [c for c in ["Datetime","Open","High","Low","Close","Volume"] if c in df.columns]
     df = df.loc[:, cols].dropna()
     if df.empty:
@@ -449,7 +472,6 @@ results["Analyst_Count"] = None
 
 top_n = int(top_n)
 if top_n > 0:
-    # Filter nur gültige Signale, falls vorhanden; sonst fallback auf oberste Zeilen
     valid_signals = results[results["Rules_OK"] == True]
     if not valid_signals.empty:
         candidates = valid_signals.sort_values(["Entry-Q","Trend"], ascending=[False, False]).head(top_n)["Ticker"].tolist()
@@ -461,8 +483,7 @@ if top_n > 0:
         rec_mean = info.get("rec_mean")
         rec_key = info.get("rec_key")
         rec_count = info.get("rec_count")
-        # assign robustly (use .loc with index mask)
-        mask = results["Ticker"] == t if "Ticker" in results.columns else results.index == t
+        mask = results["Ticker"] == t
         if mask.any():
             results.loc[mask, "Analyst_Mean"] = rec_mean
             results.loc[mask, "Analyst_Key"] = rec_key
@@ -491,14 +512,20 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------- Table (with Analyst info for Top-N) ----------------
+# ---------------- Table (with Fail_Reasons visible) ----------------
 disp = results.copy()
 # Ensure columns exist for display
-for c in ["Analyst_Mean","Analyst_Key","Analyst_Count"]:
+for c in ["Analyst_Mean","Analyst_Key","Analyst_Count","Fail_Reasons"]:
     if c not in disp.columns:
         disp[c] = None
 
-table = disp[["Ticker","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Analyst_Mean","Analyst_Key","Analyst_Count","Rules_OK"]].copy()
+# Format table for HTML display
+def fmt_val(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "–"
+    return str(v)
+
+table = disp[["Ticker","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Analyst_Mean","Analyst_Key","Analyst_Count","Rules_OK","Fail_Reasons"]].copy()
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 # ---------------- Detail view (on-demand analyst fetch if missing) ----------------
@@ -522,7 +549,6 @@ else:
     if (rec_mean is None or (isinstance(rec_mean, float) and np.isnan(rec_mean))) and (rec_key is None):
         info = fetch_ticker_info_yf(selected)
         rec_mean = info.get("rec_mean"); rec_key = info.get("rec_key"); rec_count = info.get("rec_count")
-        # write back into results for consistency
         mask = results["Ticker"] == selected
         results.loc[mask, "Analyst_Mean"] = rec_mean
         results.loc[mask, "Analyst_Key"] = rec_key
@@ -574,4 +600,3 @@ else:
         st.error("Nicht alle Trading-Regeln erfüllt – kein sauberes KO-Setup.")
         if row["Fail_Reasons"]:
             st.write(row["Fail_Reasons"])
-```
