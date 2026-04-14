@@ -1,5 +1,8 @@
 """
-Trading Scanner v3 – Entry Precision + KO-Zertifikat Panel (final, debugged)
+Trading Scanner v3 – Entry Precision + KO-Zertifikat Panel (final update)
+- Position sizer removed
+- Sidebar: replaced position calculator with KO-Setups (Konservativ / Moderat / Aggressiv)
+- Light gray UI, trading rules enforced and reported
 Start: streamlit run scanner.py
 """
 
@@ -50,49 +53,19 @@ st.markdown("""
   }
   .card-title { font-size:0.68rem; text-transform:uppercase; letter-spacing:1px; color:#6b7280; margin-bottom:8px; }
 
-  .level-row {
-    display:flex; justify-content:space-between; align-items:center;
-    padding:6px 0; border-bottom:1px solid #e5e7eb;
-    font-family:'IBM Plex Mono',monospace; font-size:0.82rem;
-  }
-  .level-row:last-child { border-bottom:none; }
-  .llabel { color:#6b7280; font-size:0.72rem; }
+  .ko-setup { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:10px; margin-bottom:10px; }
+  .ko-setup h4 { margin:0 0 6px 0; font-family:'IBM Plex Mono',monospace; color:#111827; }
+  .ko-setup p { margin:0; color:#374151; font-size:0.9rem; }
 
-  .badge {
-    display:inline-block; padding:2px 10px; border-radius:12px;
-    font-family:'IBM Plex Mono',monospace; font-size:0.72rem; font-weight:600;
-  }
-  .long-b  { background:#ecfdf5; color:#059669; border:1px solid #10b981; }
-  .short-b { background:#fef2f2; color:#ef4444; border:1px solid #f97373; }
+  .ko-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; margin-top:8px; }
+  .ko-key { color:#6b7280; font-size:0.85rem; } .ko-val { font-family:'IBM Plex Mono',monospace; color:#111827; text-align:right; }
 
-  .ko-card {
-    background:#ffffff; border:1px solid #d1d5db; border-radius:8px;
-    padding:12px 16px; margin-bottom:10px;
-  }
-  .ko-tag { font-size:0.65rem; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; color:#6b7280; }
-  .ko-grid { display:grid; grid-template-columns:1fr 1fr; gap:4px 16px; font-size:0.78rem; }
-  .ko-key  { color:#6b7280; } .ko-val { font-family:'IBM Plex Mono',monospace; color:#111827; text-align:right; }
-
-  .entry-quality {
-    display:flex; align-items:flex-start; gap:10px;
-    background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:12px 16px; margin-bottom:14px;
-  }
-  .eq-score { font-family:'IBM Plex Mono',monospace; font-size:2rem; font-weight:600; }
-  .eq-label { font-size:0.65rem; color:#6b7280; text-transform:uppercase; letter-spacing:1px; }
-
-  .pill {
-    display:inline-block; padding:1px 8px; border-radius:10px;
-    font-size:0.67rem; margin:2px 2px 2px 0;
-  }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:0.67rem; margin:2px 2px 2px 0; }
   .pill-green  { background:#ecfdf5; color:#059669; }
   .pill-red    { background:#fef2f2; color:#ef4444; }
   .pill-orange { background:#fffbeb; color:#f59e0b; }
 
-  .link-btn {
-    display:inline-block; padding:6px 14px; border-radius:6px;
-    background:#e5e7eb; border:1px solid #d1d5db; color:#0b5fff;
-    font-size:0.78rem; text-decoration:none; margin-right:6px; margin-top:4px;
-  }
+  .link-btn { display:inline-block; padding:6px 14px; border-radius:6px; background:#e5e7eb; border:1px solid #d1d5db; color:#0b5fff; font-size:0.78rem; text-decoration:none; margin-right:6px; margin-top:4px; }
 
   div.stButton > button {
     background:#ffffff; border:1px solid #d1d5db; color:#111827;
@@ -354,9 +327,9 @@ def trend_score(df: pd.DataFrame):
         if price > ema20:  s += 5
     else:
         if price < ema200: s += 15
-        if price < ema50:  s += 12
-        if ema20 < ema50:  s += 8
-        if price < ema20:  s += 5
+        if price < ema50: s += 12
+        if ema20 < ema50: s += 8
+        if price < ema20: s += 5
 
     if direction == "LONG":
         if 45 < rsi < 70:    s += 20
@@ -439,24 +412,6 @@ def search_links(ticker, direction):
         "OnVista":          f"https://www.onvista.de/derivate/knock-out?type={TYP}&underlying={quote(ticker)}",
         "Comdirect":        f"https://www.comdirect.de/inf/derivate/knockouts.html?SEARCH_VALUE={ticker}&KNOCK_OUT_TYPE={typ.upper()}",
         "DZ Bank":          f"https://www.dzbank-derivate.de/Aktuell/Suche?underlying={ticker}&type={typ}",
-    }
-
-# ─────────────────────────────────────────────────────────
-#  POSITION SIZER
-# ─────────────────────────────────────────────────────────
-def position_size(capital_eur, risk_pct, price, sl, cert_price, ratio, eur_usd):
-    risk_eur      = capital_eur * risk_pct / 100
-    sl_dist_usd   = abs(price - sl)
-    sl_dist_cert  = sl_dist_usd * ratio / eur_usd if eur_usd and eur_usd > 0 else None
-    if not sl_dist_cert or sl_dist_cert <= 0:
-        return {}
-    anzahl        = int(risk_eur / sl_dist_cert)
-    invest_eur    = anzahl * cert_price
-    return {
-        "risk_eur":   round(risk_eur, 2),
-        "anzahl":     anzahl,
-        "invest_eur": round(invest_eur, 2),
-        "max_loss":   round(anzahl * cert_price, 2),
     }
 
 # ─────────────────────────────────────────────────────────
@@ -662,7 +617,7 @@ def build_chart(df, levels, direction):
     return fig
 
 # ─────────────────────────────────────────────────────────
-#  SIDEBAR
+#  SIDEBAR (Position sizer removed; KO-Setups added)
 # ─────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Scanner")
@@ -670,10 +625,15 @@ with st.sidebar:
     dir_filter = st.radio("Richtung", ["Alle","LONG","SHORT"], horizontal=True)
 
     st.markdown("---")
-    st.markdown("### 💰 Positionsrechner")
-    capital  = st.number_input("Kapital (€)", value=10000, step=500)
-    risk_pct = st.slider("Risiko pro Trade (%)", 0.5, 5.0, 1.0, 0.5)
-    st.markdown(f"**Max. Risiko: {capital*risk_pct/100:.0f} €**")
+    st.markdown("### 🔰 KO-Setups (Konservativ / Moderat / Aggressiv)")
+    st.markdown("""
+    Die folgenden Setups sind Standardvorschläge für KO-Zertifikate.
+    Sie dienen als Orientierung: Barrier-Abstand in Vielfachen der ATR, Hebel grob geschätzt.
+    """)
+    # Show static setup descriptions
+    st.markdown('<div class="ko-setup"><h4>Konservativ 🛡️</h4><p>Barrier ≈ Preis − 2.5 × ATR · Weit, niedriger Hebel, geringes KO-Risiko.</p><div class="ko-grid"><div class="ko-key">Abstand</div><div class="ko-val">≈ 2.5 × ATR</div><div class="ko-key">Hebel</div><div class="ko-val">niedrig</div><div class="ko-key">Eignung</div><div class="ko-val">Sicherheitsorientiert</div></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ko-setup"><h4>Moderat ⚖️</h4><p>Barrier ≈ Preis − 1.5 × ATR · Ausgewogenes Verhältnis Risiko/Ertrag.</p><div class="ko-grid"><div class="ko-key">Abstand</div><div class="ko-val">≈ 1.5 × ATR</div><div class="ko-key">Hebel</div><div class="ko-val">mittel</div><div class="ko-key">Eignung</div><div class="ko-val">Standard-Setup</div></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ko-setup"><h4>Aggressiv ⚡</h4><p>Barrier ≈ Preis − 0.7 × ATR · Eng, hoher Hebel, hohes KO-Risiko.</p><div class="ko-grid"><div class="ko-key">Abstand</div><div class="ko-val">≈ 0.7 × ATR</div><div class="ko-key">Hebel</div><div class="ko-val">hoch</div><div class="ko-key">Eignung</div><div class="ko-val">Kurzfristige Spekulation</div></div></div>', unsafe_allow_html=True)
 
     st.markdown("---")
     if st.button("🔄 Neu laden"):
