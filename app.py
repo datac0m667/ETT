@@ -1,5 +1,7 @@
 """
-Trading Scanner v3 – Entry Precision + KO-Zertifikat Panel (sidebar KO-Setups moved, small font)
+Trading Scanner v3 – Entry Precision (KO proposals removed)
+- KO-Vorschläge entfernt aus Sidebar und Detailansicht
+- Light gray UI, trading rules enforced and reported
 Start: streamlit run scanner.py
 """
 
@@ -310,9 +312,9 @@ def trend_score(df: pd.DataFrame):
         if price > ema20:  s += 5
     else:
         if price < ema200: s += 15
-        if price < ema50: s += 12
-        if ema20 < ema50: s += 8
-        if price < ema20: s += 5
+        if price < ema50:  s += 12
+        if ema20 < ema50:  s += 8
+        if price < ema20:  s += 5
 
     if direction == "LONG":
         if 45 < rsi < 70:    s += 20
@@ -353,49 +355,6 @@ def build_levels(price, atr, direction: str):
         ko  = price + 2.0 * atr
     rr = abs(tp2 - price) / abs(price - sl)
     return dict(entry=price, sl=sl, tp1=tp1, tp2=tp2, ko=ko, rr=rr)
-
-# ─────────────────────────────────────────────────────────
-#  KO-ZERTIFIKAT VORSCHLÄGE
-# ─────────────────────────────────────────────────────────
-def ko_proposals(price, atr, direction, eur_usd):
-    ratio = 0.10
-    configs = [
-        ("Konservativ 🛡️", 2.5, "#059669", "Weite Barrier – niedriger Hebel, geringe KO-Gefahr"),
-        ("Moderat ⚖️",      1.5, "#0b5fff", "Ausgewogen – empfohlener Standardansatz"),
-        ("Aggressiv ⚡",     0.7, "#f59e0b", "Enge Barrier – hoher Hebel, erhöhtes KO-Risiko"),
-    ]
-    proposals = []
-    for name, mult, color, desc in configs:
-        if direction == "LONG":
-            barrier = price - mult * atr
-            strike  = barrier * 0.99
-        else:
-            barrier = price + mult * atr
-            strike  = barrier * 1.01
-
-        abstand_pct = abs(price - barrier) / price * 100
-        hebel       = price / abs(price - strike) if abs(price - strike) > 1e-9 else float("inf")
-        cert_price  = abs(price - strike) * ratio / eur_usd if eur_usd and eur_usd > 0 else None
-
-        proposals.append({
-            "name": name, "color": color, "desc": desc,
-            "barrier": round(barrier, 2), "strike": round(strike, 2),
-            "abstand": round(abstand_pct, 1),
-            "hebel":   round(hebel, 1) if np.isfinite(hebel) else None,
-            "cert_price": round(cert_price, 2) if cert_price is not None else None,
-            "ratio": ratio, "direction": direction,
-        })
-    return proposals
-
-def search_links(ticker, direction):
-    typ = "call" if direction == "LONG" else "put"
-    TYP = "CALL" if direction == "LONG" else "PUT"
-    return {
-        "Boerse Stuttgart": f"https://www.boerse-stuttgart.de/de-de/produkte/hebelprodukte/knockouts/?underlying={ticker}&producttype=knock-out-{typ}",
-        "OnVista":          f"https://www.onvista.de/derivate/knock-out?type={TYP}&underlying={quote(ticker)}",
-        "Comdirect":        f"https://www.comdirect.de/inf/derivate/knockouts.html?SEARCH_VALUE={ticker}&KNOCK_OUT_TYPE={typ.upper()}",
-        "DZ Bank":          f"https://www.dzbank-derivate.de/Aktuell/Suche?underlying={ticker}&type={typ}",
-    }
 
 # ─────────────────────────────────────────────────────────
 #  REGEL-ENGINE (Trading-Regeln)
@@ -593,7 +552,7 @@ def build_chart(df, levels, direction):
     return fig
 
 # ─────────────────────────────────────────────────────────
-#  SIDEBAR (KO-Setups placed where position sizer was)
+#  SIDEBAR (KO-Setups static descriptions where position sizer was)
 # ─────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Scanner")
@@ -601,15 +560,10 @@ with st.sidebar:
     dir_filter = st.radio("Richtung", ["Alle","LONG","SHORT"], horizontal=True)
 
     st.markdown("---")
-    # Placeholder container for KO setups (will be updated after scan with dynamic proposals)
-    ko_container = st.container()
-    # Static description header (small)
-    ko_container.markdown("### 🔰 KO-Setups (Konservativ / Moderat / Aggressiv)")
-
-    # Static short descriptions (kept compact)
-    ko_container.markdown('<div class="ko-setup"><h4>Konservativ 🛡️</h4><p>Barrier ≈ Preis − 2.5 × ATR · Weit, niedriger Hebel, geringes KO-Risiko.</p></div>', unsafe_allow_html=True)
-    ko_container.markdown('<div class="ko-setup"><h4>Moderat ⚖️</h4><p>Barrier ≈ Preis − 1.5 × ATR · Ausgewogenes Verhältnis Risiko/Ertrag.</p></div>', unsafe_allow_html=True)
-    ko_container.markdown('<div class="ko-setup"><h4>Aggressiv ⚡</h4><p>Barrier ≈ Preis − 0.7 × ATR · Eng, hoher Hebel, hohes KO-Risiko.</p></div>', unsafe_allow_html=True)
+    st.markdown("### 🔰 KO-Setups (Konservativ / Moderat / Aggressiv)")
+    st.markdown('<div class="ko-setup"><h4>Konservativ 🛡️</h4><p>Barrier ≈ Preis − 2.5 × ATR · Weit, niedriger Hebel, geringes KO-Risiko.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ko-setup"><h4>Moderat ⚖️</h4><p>Barrier ≈ Preis − 1.5 × ATR · Ausgewogenes Verhältnis Risiko/Ertrag.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ko-setup"><h4>Aggressiv ⚡</h4><p>Barrier ≈ Preis − 0.7 × ATR · Eng, hoher Hebel, hohes KO-Risiko.</p></div>', unsafe_allow_html=True)
 
     st.markdown("---")
     if st.button("🔄 Neu laden"):
@@ -666,32 +620,6 @@ st.markdown(f"""
 if results.empty:
     st.info(f"Keine Signale bei Score ≥ {min_score}. Filter lockern?")
     st.stop()
-
-# ─────────────────────────────────────────────────────────
-#  Update sidebar KO-Setups with dynamic proposals for top signal (if available)
-# ─────────────────────────────────────────────────────────
-try:
-    top_ticker = results.iloc[0]["Ticker"]
-    df_top = load(top_ticker)
-    if df_top is not None:
-        df_top = add_indicators(df_top)
-        direction_top, _ = trend_score(df_top)
-        last = df_top.iloc[-1]
-        price_top = sf(last["Close"]); atr_top = sf(last["ATR"])
-        if price_top and atr_top:
-            proposals_top = ko_proposals(price_top, atr_top, direction_top, eur_usd)
-            # Replace ko_container content with dynamic block
-            with st.sidebar:
-                st.markdown("### 🔰 KO-Setups (Top Signal)")
-                for p in proposals_top:
-                    st.markdown(
-                        f'<div class="ko-setup"><h4>{p["name"]}</h4><div class="ko-grid"><div class="ko-key">Barrier</div><div class="ko-val">{p["barrier"]}</div><div class="ko-key">Strike</div><div class="ko-val">{p["strike"]}</div><div class="ko-key">Abstand</div><div class="ko-val">{p["abstand"]}%</div><div class="ko-key">Hebel</div><div class="ko-val">{p["hebel"]}</div><div class="ko-key">Preis</div><div class="ko-val">{p['cert_price']} €</div></div></div>',
-                        unsafe_allow_html=True
-                    )
-                st.markdown("---")
-except Exception:
-    # If anything fails, keep the static descriptions already present
-    pass
 
 # ─────────────────────────────────────────────────────────
 #  TABLE (kompatibel, without Styler applymap issues)
@@ -760,7 +688,7 @@ table = pd.DataFrame({
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────
-#  DETAIL VIEW
+#  DETAIL VIEW (KO proposals removed)
 # ─────────────────────────────────────────────────────────
 selected = st.selectbox("Detailansicht Ticker", options=list(results["Ticker"]), index=0)
 df_detail = load(selected)
@@ -773,7 +701,6 @@ else:
     last = df_detail.iloc[-1]
     price = sf(last["Close"]); atr = sf(last["ATR"])
     levels = build_levels(price, atr, direction)
-    proposals = ko_proposals(price, atr, direction, eur_usd)
 
     st.markdown(f"### {selected} – {direction} – TrendScore {ts} – EntryQ {eq_score}")
     fig = build_chart(df_detail, levels, direction)
@@ -785,24 +712,6 @@ else:
         cls = "pill-green" if kind == "good" else ("pill-orange" if kind == "neutral" else "pill-red")
         pills.append(f'<span class="pill {cls}">{txt}</span>')
     st.markdown(" ".join(pills), unsafe_allow_html=True)
-
-    st.markdown("#### KO-Vorschläge (dieses Ticker-Setup)")
-    for p in proposals:
-        st.markdown(
-            f"""
-            <div class="ko-card">
-              <div class="ko-tag">{p['name']}</div>
-              <div class="ko-grid">
-                <div class="ko-key">Barrier</div><div class="ko-val">{p['barrier']}</div>
-                <div class="ko-key">Strike</div><div class="ko-val">{p['strike']}</div>
-                <div class="ko-key">Abstand</div><div class="ko-val">{p['abstand']}%</div>
-                <div class="ko-key">Hebel</div><div class="ko-val">{p['hebel']}</div>
-                <div class="ko-key">Preis</div><div class="ko-val">{p['cert_price']} €</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
     st.markdown("#### Regel-Check (Scan)")
     row = results[results["Ticker"] == selected].iloc[0]
