@@ -1,9 +1,6 @@
 """
-Trading Scanner v5 – Pools: S&P 500 / Nasdaq / EuroStoxx + automatic prefilter
-- Manual watchlist removed
-- Pools available: S&P 500 (sample), Nasdaq-100 (sample), EuroStoxx50 (sample)
-- Prefilter by marketCap and averageVolume before scanning
-- Light gray UI, trading rules enforced and reported
+Trading Scanner v6 – Pools (S&P / Nasdaq / EuroStoxx) + optional market check,
+configurable RSI/ATR prefilters, hourly->daily fallback, improved diagnostics.
 Start: streamlit run scanner.py
 """
 
@@ -15,10 +12,9 @@ from datetime import datetime
 from urllib.parse import quote
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from collections import Counter
 
-# ─────────────────────────────────────────────────────────
-#  PAGE CONFIG + THEME
-# ─────────────────────────────────────────────────────────
+# ---------------- Page config & theme ----------------
 st.set_page_config(page_title="Trading Scanner", page_icon="📡", layout="wide")
 
 st.markdown("""
@@ -41,10 +37,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────
-#  POOLS (sample tickers)
-#  Replace or extend these lists with full index constituents if desired.
-# ─────────────────────────────────────────────────────────
+# ---------------- Pools (sample lists) ----------------
+# NOTE: For production, replace sample lists with full index constituents (CSV).
 SP500_TICKERS = [
     "AAPL","MSFT","AMZN","NVDA","GOOGL","META","TSLA","BRK-B","JPM","JNJ","V","PG","UNH","HD","MA",
     "DIS","PYPL","ADBE","CMCSA","NFLX","INTC","PFE","KO","PEP","CSCO","XOM","CVX","ABBV","T","NKE",
@@ -59,22 +53,20 @@ NASDAQ100_TICKERS = [
     "DOCU","ZM","SNPS","MELI","EA","ROST","EXC","MNST","CTSH","WDAY"
 ]
 
+# EuroStoxx50 sample tickers with exchange suffixes (common yfinance format)
 EUROSTOXX50_TICKERS = [
     "ASML.AS","SAP.DE","SAN.PA","SIE.DE","OR.PA","BNP.PA","AIR.PA","RNO.PA","ENEL.MI","ENI.MI",
     "IBE.MC","TOTF.PA","VOW3.DE","BAS.DE","DTE.DE","MC.PA","PHIA.AS","CRH.I","AD.AS","ABI.BR",
-    "LVMH.PA","MC.PA","SHEL.L","ULVR.L","NESN.SW","NOVN.SW","ROG.SW","CS.PA","BN.PA","BAYN.DE"
+    "LVMH.PA","SHEL.L","ULVR.L","NESN.SW","NOVN.SW","ROG.SW","CS.PA","BN.PA","BAYN.DE","MC.PA"
 ]
 
-# Map pool names to lists
 POOLS = {
-    "S&P 500 (sample)": SP500_TICKERS,
-    "Nasdaq-100 (sample)": NASDAQ100_TICKERS,
-    "EuroStoxx50 (sample)": EUROSTOXX50_TICKERS,
+    "S&P 500": SP500_TICKERS,
+    "Nasdaq-100": NASDAQ100_TICKERS,
+    "EuroStoxx50": EUROSTOXX50_TICKERS,
 }
 
-# ─────────────────────────────────────────────────────────
-#  HELPERS
-# ─────────────────────────────────────────────────────────
+# ---------------- Helpers ----------------
 def sf(x):
     try:
         if isinstance(x, pd.Series):
@@ -96,24 +88,43 @@ def to_series(df, col):
         s = s.iloc[:, 0]
     return pd.to_numeric(s, errors="coerce")
 
-# ─────────────────────────────────────────────────────────
-#  DATA LOADING
-# ─────────────────────────────────────────────────────────
+# ---------------- Data loader with hourly -> daily fallback ----------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load(ticker: str):
+    """
+    Try hourly 120d first (for intraday precision). If insufficient rows or empty,
+    fallback to daily 720d to ensure indicators (EMA200, ATR14) can be computed.
+    """
     try:
         df = yf.download(ticker, period="120d", interval="1h", progress=False)
-        if df is None or df.empty:
-            return None
-        df = df.reset_index()
-        df = flatten(df)
-        for col in ["Open","High","Low","Close","Volume"]:
-            if col in df.columns:
-                df[col] = to_series(df, col)
-        df = df[["Datetime","Open","High","Low","Close","Volume"]].dropna()
-        return df
     except Exception:
+        df = None
+
+    if df is None or df.empty or len(df) < 220:
+        try:
+            df = yf.download(ticker, period="720d", interval="1d", progress=False)
+        except Exception:
+            df = None
+
+    if df is None or df.empty:
         return None
+
+    df = df.reset_index()
+    df = flatten(df)
+    for col in ["Open","High","Low","Close","Volume"]:
+        if col in df.columns:
+            df[col] = to_series(df, col)
+    # Ensure Datetime column name consistency
+    if "Datetime" not in df.columns and "Date" in df.columns:
+        df = df.rename(columns={"Date": "Datetime"})
+    if "Datetime" not in df.columns and "index" in df.columns:
+        df = df.rename(columns={"index": "Datetime"})
+    # Keep only required columns and drop rows with NaNs
+    cols = [c for c in ["Datetime","Open","High","Low","Close","Volume"] if c in df.columns]
+    df = df.loc[:, cols].dropna()
+    if df.empty:
+        return None
+    return df
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_eur_usd():
@@ -124,9 +135,7 @@ def get_eur_usd():
     except Exception:
         return 1.09
 
-# ─────────────────────────────────────────────────────────
-#  INDICATORS
-# ─────────────────────────────────────────────────────────
+# ---------------- Indicators ----------------
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     c = df["Close"]
@@ -155,9 +164,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["Vol_avg"] = df["Volume"].rolling(20).mean()
     return df.dropna()
 
-# ─────────────────────────────────────────────────────────
-#  MARKET METRICS
-# ─────────────────────────────────────────────────────────
+# ---------------- Market metrics ----------------
 @st.cache_data(ttl=300, show_spinner=False)
 def market_metrics():
     try:
@@ -176,9 +183,7 @@ def market_metrics():
     except Exception:
         return {"SPY_chg": None, "QQQ_chg": None, "VIX": None}
 
-# ─────────────────────────────────────────────────────────
-#  ENTRY QUALITY / TREND / LEVELS
-# ─────────────────────────────────────────────────────────
+# ---------------- Entry quality / trend / levels ----------------
 def entry_quality(df: pd.DataFrame, direction: str):
     r = df.iloc[-1]; prev = df.iloc[-2]
     price = sf(r["Close"]); ema20 = sf(r["EMA20"]); atr = sf(r["ATR"])
@@ -290,79 +295,110 @@ def build_levels(price, atr, direction: str):
     rr = abs(tp2 - price) / abs(price - sl) if abs(price - sl) > 1e-9 else None
     return dict(entry=price, sl=sl, tp1=tp1, tp2=tp2, ko=ko, rr=rr)
 
-# ─────────────────────────────────────────────────────────
-#  PREFILTER (marketCap & avgVolume)
-# ─────────────────────────────────────────────────────────
+# ---------------- Prefilter with diagnostics ----------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=200):
+def prefilter_tickers(tickers, min_mcap=5e9, min_avgvol=300000, max_checks=500):
+    """
+    Returns tuple (kept_list, removed_list, checked_count)
+    Uses yfinance Ticker.info; some tickers (especially EU with suffixes) may not return marketCap/averageVolume.
+    """
     keep = []
+    removed = []
     checked = 0
     for t in tickers:
         if checked >= max_checks:
             break
+        checked += 1
         try:
             info = yf.Ticker(t).info
-            checked += 1
-            mcap = info.get("marketCap") or info.get("market_cap")
-            avgvol = info.get("averageVolume") or info.get("averageVolume10days") or info.get("volume")
-            if mcap is None or avgvol is None:
-                continue
+        except Exception:
+            removed.append((t, "info_error"))
+            continue
+        mcap = info.get("marketCap") or info.get("market_cap")
+        avgvol = info.get("averageVolume") or info.get("averageVolume10days") or info.get("volume")
+        if mcap is None or avgvol is None:
+            removed.append((t, "missing_info"))
+            continue
+        try:
             if mcap >= min_mcap and avgvol >= min_avgvol:
                 keep.append(t)
+            else:
+                removed.append((t, "below_threshold"))
         except Exception:
-            continue
-    return keep
+            removed.append((t, "error"))
+    return keep, removed, checked
 
-# ─────────────────────────────────────────────────────────
-#  RULE ENGINE
-# ─────────────────────────────────────────────────────────
-def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, market: dict):
+# ---------------- Rule engine (configurable) ----------------
+def evaluate_rules(df: pd.DataFrame, direction: str, price: float, atr: float, market: dict,
+                   require_market=True, rsi_min=45, rsi_max=60, atr_min=0.5, atr_max=3.0):
     reasons = []; ok = True
     ema20 = sf(df["EMA20"].iloc[-1]); ema50 = sf(df["EMA50"].iloc[-1]); ema200 = sf(df["EMA200"].iloc[-1])
     rsi = sf(df["RSI"].iloc[-1]); macd = sf(df["MACD"].iloc[-1]); msig = sf(df["MACD_signal"].iloc[-1])
     atr_pct = (atr / price * 100) if price and atr else None
     spy_chg = market.get("SPY_chg"); qqq_chg = market.get("QQQ_chg"); vix = market.get("VIX")
+
+    # Trend structure
     if direction == "LONG":
         if not (price and ema20 and ema50 and ema200 and price > ema20 > ema50 > ema200):
             ok = False; reasons.append("Trend nicht klar: Long-Struktur fehlt.")
     else:
         if not (price and ema20 and ema50 and ema200 and price < ema20 < ema50 < ema200):
             ok = False; reasons.append("Trend nicht klar: Short-Struktur fehlt.")
-    if atr_pct is None or not (0.5 <= atr_pct <= 3.0):
+
+    # ATR% range
+    if atr_pct is None or not (atr_min <= atr_pct <= atr_max):
         ok = False; reasons.append(f"ATR% nicht moderat ({'n/a' if atr_pct is None else f'{atr_pct:.2f}'}).")
-    if rsi is None or macd is None or msig is None or not (45 <= rsi <= 60 and macd > msig):
-        ok = False; reasons.append("Momentum nicht ideal (RSI/MACD).")
+
+    # RSI + MACD
+    if rsi is None or macd is None or msig is None or not (rsi_min <= rsi <= rsi_max and macd > msig):
+        ok = False; reasons.append(f"Momentum nicht ideal (RSI {rsi}, MACD vs Signal).")
+
+    # Trend break
     if direction == "LONG" and price and ema20 and price < ema20:
         ok = False; reasons.append("Trendbruch: Kurs unter EMA20.")
     if direction == "SHORT" and price and ema20 and price > ema20:
         ok = False; reasons.append("Trendbruch: Kurs über EMA20.")
+
+    # VIX check
     if vix is not None and vix > 20:
         ok = False; reasons.append(f"VIX hoch ({vix:.1f}).")
+
+    # RSI extremes
     if rsi is not None and (rsi < 40 or rsi > 70):
         ok = False; reasons.append(f"Momentum kritisch (RSI {rsi:.1f}).")
-    good_market = (spy_chg is not None and qqq_chg is not None and vix is not None and spy_chg > 0 and qqq_chg > 0 and vix < 20)
-    if not good_market:
-        ok = False; reasons.append("Marktumfeld nicht ideal (SPY/QQQ/VIX).")
+
+    # Market environment (optional)
+    if require_market:
+        good_market = (spy_chg is not None and qqq_chg is not None and vix is not None and spy_chg > 0 and qqq_chg > 0 and vix < 20)
+        if not good_market:
+            ok = False; reasons.append("Marktumfeld nicht ideal (SPY/QQQ/VIX).")
+
     return ok, reasons
 
-# ─────────────────────────────────────────────────────────
-#  SCAN
-# ─────────────────────────────────────────────────────────
+# ---------------- Scan (collect fail reasons counts) ----------------
 @st.cache_data(ttl=300, show_spinner=False)
-def run_scan(min_score, pool_tickers):
+def run_scan(min_score, pool_tickers, require_market, rsi_min, rsi_max, atr_min, atr_max):
     results = []
+    fail_reasons_counter = Counter()
     market = market_metrics()
     for ticker in pool_tickers:
         df = load(ticker)
         if df is None or len(df) < 220:
+            fail_reasons_counter["insufficient_data"] += 1
             continue
-        df = add_indicators(df)
+        try:
+            df = add_indicators(df)
+        except Exception:
+            fail_reasons_counter["indicator_error"] += 1
+            continue
         direction, ts = trend_score(df)
         if direction is None or ts < min_score:
+            fail_reasons_counter["trend_score_too_low"] += 1
             continue
         r = df.iloc[-1]
         price = sf(r["Close"]); atr = sf(r["ATR"]); rsi = sf(r["RSI"])
         if not price or not atr:
+            fail_reasons_counter["missing_price_or_atr"] += 1
             continue
         eq, _ = entry_quality(df, direction)
         levels = build_levels(price, atr, direction)
@@ -372,7 +408,13 @@ def run_scan(min_score, pool_tickers):
             p0 = sf(prev.iloc[-1]["Close"])
             if p0:
                 chg = (price - p0) / p0 * 100
-        rules_ok, reasons = evaluate_rules(df, direction, price, atr, market)
+        rules_ok, reasons = evaluate_rules(df, direction, price, atr, market,
+                                           require_market=require_market,
+                                           rsi_min=rsi_min, rsi_max=rsi_max,
+                                           atr_min=atr_min, atr_max=atr_max)
+        if not rules_ok:
+            for rr in reasons:
+                fail_reasons_counter[rr] += 1
         results.append({
             "Ticker": ticker,
             "Sektor": "–",
@@ -390,20 +432,23 @@ def run_scan(min_score, pool_tickers):
     df_out = pd.DataFrame(results)
     if not df_out.empty:
         df_out = df_out.sort_values(["Rules_OK", "Trend", "Entry-Q"], ascending=[False, False, False]).reset_index(drop=True)
-    return df_out
+    return df_out, fail_reasons_counter
 
-# ─────────────────────────────────────────────────────────
-#  SIDEBAR: Pool selection + prefilter controls
-# ─────────────────────────────────────────────────────────
+# ---------------- Sidebar controls ----------------
 with st.sidebar:
     st.markdown("### ⚙️ Scanner")
-    min_score = st.slider("Mindest-Trend-Score", 40, 90, 60, 5)
+    min_score = st.slider("Mindest-Trend-Score", 30, 90, 60, 5)
     pool_choice = st.selectbox("Pool wählen", list(POOLS.keys()))
     st.markdown("---")
-    st.markdown("### 🔎 Prefilter (vor Scan)")
+    st.markdown("### 🔎 Prefilter (MarketCap / AvgVolume)")
     min_mcap = st.number_input("Min MarketCap (USD)", value=5_000_000_000, step=1_000_000_000, format="%d")
-    min_avgvol = st.number_input("Min Avg Volume", value=300_000, step=50_000, format="%d")
-    max_info_checks = st.number_input("Max info checks (prefilter)", value=200, step=50, format="%d")
+    min_avgvol = st.number_input("Min Avg Volume", value=200_000, step=50_000, format="%d")
+    max_info_checks = st.number_input("Max info checks (prefilter)", value=300, step=50, format="%d")
+    st.markdown("---")
+    st.markdown("### ⚖️ Rule parameters")
+    require_market = st.checkbox("Markt-Check erzwingen (SPY/QQQ/VIX)", value=True)
+    rsi_min, rsi_max = st.slider("RSI Range", 30, 80, (45, 60))
+    atr_min, atr_max = st.slider("ATR% Range", 0.1, 6.0, (0.5, 3.0), step=0.1)
     st.markdown("---")
     st.markdown("### 🔰 KO-Setups (Info)")
     st.markdown('<div class="ko-setup"><strong>Konservativ</strong>: Barrier ≈ Preis − 2.5 × ATR · Weit, niedriger Hebel.</div>', unsafe_allow_html=True)
@@ -415,31 +460,45 @@ with st.sidebar:
         st.rerun()
     st.markdown(f'<p style="font-size:0.72rem;color:#6b7280;">{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} · EUR/USD auto</p>', unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────
-#  Determine pool tickers and apply prefilter
-# ─────────────────────────────────────────────────────────
+# ---------------- Determine pool and prefilter ----------------
 base_pool = POOLS.get(pool_choice, [])
-st.info(f"Pool: {pool_choice} · Kandidaten: {len(base_pool)}")
+st.info(f"Pool: {pool_choice} · Kandidaten (sample): {len(base_pool)}")
 
 with st.spinner("Prefilter läuft (MarketCap / AvgVolume)…"):
-    pool_prefiltered = prefilter_tickers(base_pool, min_mcap=min_mcap, min_avgvol=min_avgvol, max_checks=int(max_info_checks))
+    pool_prefiltered, removed_list, checked = prefilter_tickers(base_pool, min_mcap=min_mcap, min_avgvol=min_avgvol, max_checks=int(max_info_checks))
+    removed_count = len(removed_list)
+    st.write(f"Prefilter geprüft: {checked} tickers · entfernt: {removed_count}")
+    if removed_count:
+        # show short summary of removal reasons (top 5)
+        reasons = [r for (_, r) in removed_list]
+        rc = Counter(reasons)
+        st.write("Entfernungsgründe (Top):")
+        for k, v in rc.most_common(5):
+            st.write(f"- {k}: {v}")
     if not pool_prefiltered:
         st.warning("Prefilter hat keine Ticker zurückgegeben. Pool wird ungefiltert verwendet.")
         pool_prefiltered = base_pool
 
-# ─────────────────────────────────────────────────────────
-#  Run scan
-# ─────────────────────────────────────────────────────────
+# ---------------- Run scan ----------------
 with st.spinner("Scanner läuft …"):
-    results = run_scan(min_score, pool_prefiltered)
+    results, fail_reasons_counter = run_scan(min_score, pool_prefiltered, require_market, rsi_min, rsi_max, atr_min, atr_max)
 
+# ---------------- Post-scan diagnostics ----------------
+st.markdown("---")
+st.markdown("## Scan Ergebnisse & Diagnose")
 if results.empty:
-    st.info("Keine Signale gefunden. Filter anpassen oder Pool wechseln.")
+    st.warning("Keine Signale gefunden. Mögliche Ursachen:")
+    st.write("- Regeln zu strikt (RSI/ATR/Trend).")
+    st.write("- Prefilter hat viele Kandidaten entfernt.")
+    st.write("- Datenqualität / Ticker-Suffix (insbesondere EuroStoxx).")
+    # show top fail reasons from prefilter and scan
+    st.write("Prefilter entfernte Ticker:", removed_count)
+    st.write("Häufigste Scan-Fail-Gründe (Top 10):")
+    for k, v in fail_reasons_counter.most_common(10):
+        st.write(f"- {k}: {v}")
     st.stop()
 
-# ─────────────────────────────────────────────────────────
-#  SUMMARY
-# ─────────────────────────────────────────────────────────
+# ---------------- Summary metrics ----------------
 lc = len(results[results["Dir"] == "LONG"])
 sc = len(results[results["Dir"] == "SHORT"])
 aq = int(results["Entry-Q"].mean()) if not results.empty else 0
@@ -462,10 +521,13 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────
-#  TABLE (HTML colored)
-# ─────────────────────────────────────────────────────────
-disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK"]].copy()
+# ---------------- Show top fail reasons summary ----------------
+st.markdown("### Häufigste Scan-Fail-Gründe (Top 10)")
+for k, v in fail_reasons_counter.most_common(10):
+    st.write(f"- **{k}**: {v}")
+
+# ---------------- Table (HTML colored) ----------------
+disp = results[["Ticker","Sektor","Dir","Trend","Entry-Q","Price","RSI","ATR%","RR","Chg%","Rules_OK","Fail_Reasons"]].copy()
 
 def color_dir_html(v):
     if v == "LONG": return '<span style="color:#0b5fff;font-weight:600">LONG</span>'
@@ -509,12 +571,11 @@ table = pd.DataFrame({
     "RR": disp["RR"].apply(lambda x: f"{x:.1f}" if x is not None else "–"),
     "Chg%": disp["Chg%"].apply(color_chg_html),
     "Rules": disp["Rules_OK"].apply(color_rules_html),
+    "Fail_Reasons": disp["Fail_Reasons"],
 })
 st.markdown(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────
-#  DETAIL VIEW (no KO proposals)
-# ─────────────────────────────────────────────────────────
+# ---------------- Detail view ----------------
 selected = st.selectbox("Detailansicht Ticker", options=list(results["Ticker"]), index=0)
 df_detail = load(selected)
 if df_detail is None:
