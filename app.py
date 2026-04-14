@@ -600,10 +600,10 @@ def sc2(v):
 
 styled = (
     disp.style
-    .applymap(sd,  subset=["Dir"])
-    .applymap(ss,  subset=["Trend"])
-    .applymap(se,  subset=["Entry-Q"])
-    .applymap(sc2, subset=["Chg%"])
+    .apply(sd,  subset=["Dir"], axis=None)
+    .apply(ss,  subset=["Trend"], axis=None)
+    .apply(se,  subset=["Entry-Q"], axis=None)
+    .apply(sc2, subset=["Chg%"], axis=None)
     .format({"Price":"{:.2f}","RSI":"{:.1f}","ATR%":"{:.2f}%","RR":"{:.1f}",
              "Chg%": lambda x: f"{x:+.2f}%" if x is not None else "–"})
     .set_properties(**{"background-color":"#161b22","color":"#c9d1d9"})
